@@ -1,192 +1,224 @@
 
-import React from 'react';
-import { HexData, TerrainType, ElementalOverlay } from '../types';
-import { TERRAIN_PATHS, OVERLAY_COLORS } from '../constants';
+import React, { useState, useEffect, useRef } from 'react';
+import { HexData, TerrainType, PlanarAlignment } from '../types';
+import { TERRAIN_PATHS, PLANAR_COLORS } from '../theme';
 import { generateEncounter } from '../services/geminiService';
-import { MapPin, Clock, Calendar, Sword, RefreshCcw, AlertTriangle, Droplets, Flame, Snowflake, Skull, Leaf, Zap, Wand2 } from 'lucide-react';
+import { X, Clock, Calendar, Sword, RefreshCcw, Save, Edit3, Sparkles } from 'lucide-react';
 
 interface CurrentHexProps {
   hex: HexData | null;
-  onApplyOverlay: (hex: HexData, type: ElementalOverlay | null) => void;
+  onUpdateHex: (hex: HexData) => void;
+  onClose: () => void;
 }
 
-export const CurrentHex: React.FC<CurrentHexProps> = ({ hex, onApplyOverlay }) => {
-  const [encounterText, setEncounterText] = React.useState<string | null>(null);
-  const [loadingEncounter, setLoadingEncounter] = React.useState(false);
-  const [showOverlayMenu, setShowOverlayMenu] = React.useState(false);
+export const CurrentHex: React.FC<CurrentHexProps> = ({ hex, onUpdateHex, onClose }) => {
+  const [encounterText, setEncounterText] = useState<string | null>(null);
+  const [loadingEncounter, setLoadingEncounter] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  
+  // Refs for race condition handling
+  const currentHexIdRef = useRef<string | null>(null);
+  
+  // Edit State
+  const [editNotes, setEditNotes] = useState('');
+  const [editTerrain, setEditTerrain] = useState<TerrainType>(TerrainType.PLAIN);
 
-  React.useEffect(() => {
+  useEffect(() => {
+    currentHexIdRef.current = hex?.id || null;
     setEncounterText(null);
-    setShowOverlayMenu(false);
+    setIsEditing(false);
+    if (hex) {
+        setEditNotes(hex.notes || '');
+        setEditTerrain(hex.terrain);
+    }
   }, [hex]);
 
   const handleRollEncounter = async () => {
     if (!hex || hex.terrain === TerrainType.EMPTY) return;
+    
+    // Capture the ID at the start of the request
+    const requestId = hex.id;
+    
     setLoadingEncounter(true);
     const text = await generateEncounter(hex.terrain, 5);
-    setEncounterText(text);
-    setLoadingEncounter(false);
+    
+    // Check if the user is still looking at the same hex
+    if (currentHexIdRef.current === requestId) {
+        setEncounterText(text);
+        setLoadingEncounter(false);
+    }
   };
 
-  if (!hex) {
-    return (
-      <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 text-center h-full flex flex-col justify-center items-center text-slate-500">
-        <MapPin className="w-16 h-16 mb-4 opacity-20" />
-        <p>Select a hex or explore new territory to view details.</p>
-      </div>
-    );
-  }
+  const handleSaveEdit = () => {
+      if (!hex) return;
+      onUpdateHex({
+          ...hex,
+          notes: editNotes,
+          terrain: editTerrain
+      });
+      setIsEditing(false);
+  };
 
-  const iconPath = hex.icon || TERRAIN_PATHS[hex.terrain];
+  if (!hex) return null;
 
-  if (hex.terrain === TerrainType.EMPTY) {
-      return (
-        <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden shadow-lg flex flex-col h-full">
-             <div className="p-8 flex flex-col items-center justify-center h-full text-center space-y-4">
-                 <div className="w-16 h-16 bg-slate-900 rounded-full flex items-center justify-center border-2 border-slate-700 border-dashed text-slate-600">
-                    <AlertTriangle size={32} />
-                 </div>
-                 <div>
-                     <h2 className="text-xl font-bold text-slate-300">Unexplored Sector</h2>
-                     <p className="text-slate-500 text-sm mt-2 max-w-[200px] mx-auto">
-                        This region has not been generated yet. Click it on the map to scout the terrain.
-                     </p>
-                 </div>
-             </div>
-        </div>
-      )
-  }
+  if (hex.isSectorPlaceholder) return null; 
 
-  // Get primary overlay color for header if any exists, otherwise undefined
-  const primaryEffect = hex.effects?.[0];
-  const headerOverlayColor = primaryEffect ? OVERLAY_COLORS[primaryEffect.type] : undefined;
+  const iconPath = TERRAIN_PATHS[hex.terrain];
+  
+  // Planar Color
+  const planarColor = hex.planarAlignment ? PLANAR_COLORS[hex.planarAlignment] : undefined;
 
   return (
-    <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden shadow-lg flex flex-col h-full">
-      <div className="bg-slate-900 p-4 border-b border-slate-700 flex justify-between items-center">
-        <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-slate-800 rounded-lg border border-slate-700 flex items-center justify-center text-slate-200 relative overflow-hidden">
-                 {headerOverlayColor && (
-                    <div 
-                        className="absolute inset-0 opacity-30" 
-                        style={{ backgroundColor: headerOverlayColor }}
-                    />
-                 )}
-                 <svg viewBox="0 0 24 24" className="w-8 h-8 stroke-current fill-none stroke-2 relative z-10">
-                    <path d={iconPath} />
-                 </svg>
-            </div>
-            <div>
-                <h2 className="text-xl font-bold text-slate-100">{hex.terrain}</h2>
-                <p className="text-sm text-slate-400">{hex.element} Variation</p>
-            </div>
-        </div>
-        <div className="text-right">
-            <div className="text-xs text-slate-500">Coordinates</div>
-            <div className="font-mono text-amber-500">q:{hex.coordinates.x}, r:{hex.coordinates.y}</div>
-        </div>
-      </div>
+    <div className="bg-slate-900/95 backdrop-blur-md h-full flex flex-col border border-slate-700 shadow-2xl rounded-l-2xl overflow-hidden animate-in slide-in-from-right-10">
+      
+      {/* Header Image / Icon */}
+      <div className="relative bg-slate-950 p-6 flex flex-col items-center justify-center border-b border-slate-800">
+        <button 
+          onClick={onClose}
+          className="absolute top-4 left-4 text-slate-500 hover:text-white transition-colors"
+        >
+          <X size={20} />
+        </button>
 
-      <div className="p-6 space-y-6 overflow-y-auto flex-1">
-        
-        {/* Description Area */}
-        <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700/50 italic text-slate-300 relative">
-            "{hex.description || "No description available."}"
-            
-            {/* Display list of active effects */}
-            {hex.effects && hex.effects.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-slate-800 flex flex-col gap-1">
-                    {hex.effects.map((effect, idx) => (
-                        <div key={idx} className="text-xs font-bold uppercase tracking-widest flex items-center gap-2" style={{ color: OVERLAY_COLORS[effect.type] }}>
-                            <Wand2 size={12} />
-                            {effect.type} Influence ({Math.round(effect.strength * 100)}%)
-                        </div>
+        {/* Hex Icon Circle */}
+        <div 
+            className="w-20 h-20 rounded-full border-2 border-slate-700 flex items-center justify-center text-slate-200 relative overflow-hidden shadow-inner mb-3"
+            style={{ 
+                backgroundColor: planarColor ? `${planarColor}33` : '#1e293b',
+                borderColor: planarColor || '#334155'
+            }}
+        >
+            <svg viewBox="0 0 24 24" className="w-10 h-10 stroke-current fill-none stroke-2 relative z-10">
+            <path d={iconPath} />
+            </svg>
+        </div>
+
+        <div className="text-center w-full">
+            {isEditing ? (
+                 <select 
+                    value={editTerrain}
+                    onChange={(e) => setEditTerrain(e.target.value as TerrainType)}
+                    className="bg-slate-800 text-slate-200 text-sm p-1 rounded border border-slate-600 outline-none w-full text-center"
+                 >
+                    {Object.values(TerrainType).filter(t => t !== TerrainType.EMPTY).map(t => (
+                        <option key={t} value={t}>{t}</option>
                     ))}
+                 </select>
+            ) : (
+                <h2 className="text-2xl font-bold text-slate-100">{hex.terrain}</h2>
+            )}
+            
+            {/* Coordinates */}
+            <p className="text-xs text-slate-500 font-mono mt-1">
+                COORD: {hex.coordinates.x}, {hex.coordinates.y}
+            </p>
+
+            {/* Planar Badge */}
+            {hex.planarAlignment && hex.planarAlignment !== PlanarAlignment.MATERIAL && (
+                <div 
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider mt-2 border"
+                    style={{ 
+                        borderColor: planarColor,
+                        backgroundColor: `${planarColor}20`,
+                        color: planarColor
+                    }}
+                >
+                    <Sparkles size={10} />
+                    {hex.planarAlignment}
                 </div>
             )}
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-2 gap-4">
-            <div className="bg-slate-700/30 p-3 rounded border border-slate-700">
-                <div className="text-xs text-slate-400 uppercase tracking-wider flex items-center gap-1 mb-1">
-                  <Clock size={12} /> Travel Time
-                </div>
-                <div className="text-2xl font-bold text-blue-400">{hex.travelTimeHours} <span className="text-sm font-normal text-slate-500">hours</span></div>
+        <button 
+            onClick={() => setIsEditing(!isEditing)}
+            className="absolute top-4 right-4 text-slate-500 hover:text-white transition-colors"
+            title="Edit Hex Details"
+        >
+            {isEditing ? <X size={18} /> : <Edit3 size={18} />}
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-700">
+        
+        {/* GM Notes Section (Editable) */}
+        <div className="space-y-2">
+            <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">GM Notes</label>
             </div>
-            <div className="bg-slate-700/30 p-3 rounded border border-slate-700">
-                <div className="text-xs text-slate-400 uppercase tracking-wider flex items-center gap-1 mb-1">
-                  <Calendar size={12} /> Exploration
+            {isEditing ? (
+                <div className="space-y-2">
+                    <textarea 
+                        className="w-full h-32 bg-slate-800 border border-slate-600 rounded p-2 text-sm text-slate-200 focus:ring-1 focus:ring-amber-500 outline-none resize-none"
+                        value={editNotes}
+                        onChange={(e) => setEditNotes(e.target.value)}
+                        placeholder="Add secret notes..."
+                    />
+                    <button 
+                        onClick={handleSaveEdit}
+                        className="w-full bg-amber-700 hover:bg-amber-600 text-white text-xs font-bold py-2 rounded flex items-center justify-center gap-2"
+                    >
+                        <Save size={14} /> Save Changes
+                    </button>
                 </div>
-                <div className="text-2xl font-bold text-emerald-400">{hex.explorationTimeDays} <span className="text-sm font-normal text-slate-500">days</span></div>
-            </div>
+            ) : (
+                 <div className="bg-slate-800/50 p-3 rounded border border-slate-700/50 min-h-[3rem]">
+                    {hex.notes && hex.notes !== hex.groupId ? (
+                        <p className="text-sm text-slate-300 whitespace-pre-wrap">{hex.notes}</p>
+                    ) : (
+                        <p className="text-xs text-slate-600 italic">No notes added.</p>
+                    )}
+                </div>
+            )}
         </div>
 
-        {/* Actions: Encounter & Overlay */}
-        <div className="border-t border-slate-700 pt-4 space-y-4">
+        {/* AI Description (Flavor) */}
+        {!isEditing && (
+            <div className="space-y-2">
+                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Oracle Description</label>
+                 <div className="text-sm text-slate-400 italic leading-relaxed border-l-2 border-slate-700 pl-3">
+                    "{hex.description || "The mists obscure this land..."}"
+                 </div>
+            </div>
+        )}
+
+        {/* Travel Stats */}
+        {!isEditing && (
+            <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-800/50 p-3 rounded border border-slate-700/50 text-center">
+                    <Clock className="w-4 h-4 text-blue-400 mx-auto mb-1" />
+                    <div className="text-lg font-bold text-slate-200">{hex.travelTimeHours}h</div>
+                    <div className="text-[10px] text-slate-500 uppercase">Travel</div>
+                </div>
+                <div className="bg-slate-800/50 p-3 rounded border border-slate-700/50 text-center">
+                    <Calendar className="w-4 h-4 text-emerald-400 mx-auto mb-1" />
+                    <div className="text-lg font-bold text-slate-200">{hex.explorationTimeDays}d</div>
+                    <div className="text-[10px] text-slate-500 uppercase">Explore</div>
+                </div>
+            </div>
+        )}
+
+        {/* Tools */}
+        <div className="space-y-4 pt-4 border-t border-slate-800">
              
-             {/* Encounter */}
+             {/* Encounter Generator */}
              <div>
-                 <h3 className="font-semibold text-rose-400 mb-2 flex items-center gap-2">
-                    <Sword size={16} /> Random Encounter
-                 </h3>
-                 
                  {!encounterText ? (
                      <button 
                         onClick={handleRollEncounter}
                         disabled={loadingEncounter}
-                        className="text-sm bg-rose-900/30 hover:bg-rose-900/50 text-rose-300 px-4 py-2 rounded border border-rose-900 transition-colors w-full text-left flex justify-between items-center"
+                        className="w-full py-2 bg-rose-950/30 hover:bg-rose-900/40 border border-rose-900/50 rounded text-rose-400 text-sm font-bold flex items-center justify-center gap-2 transition-all"
                      >
-                        <span>Roll for danger (Gemini AI)</span>
-                        {loadingEncounter && <span className="animate-pulse">...</span>}
+                        {loadingEncounter ? <RefreshCcw className="animate-spin" size={14} /> : <Sword size={14} />}
+                        Roll Encounter
                      </button>
                  ) : (
-                     <div className="bg-rose-950/30 border border-rose-900/50 p-3 rounded text-sm text-rose-200 animate-in fade-in">
-                        {encounterText}
-                        <button onClick={() => setEncounterText(null)} className="mt-2 text-xs text-rose-500 hover:text-rose-400 underline flex items-center gap-1">
-                          <RefreshCcw size={12} /> Clear
+                     <div className="bg-rose-950/20 border border-rose-900/30 p-3 rounded text-sm text-rose-200 animate-in fade-in">
+                        <p>{encounterText}</p>
+                        <button onClick={() => setEncounterText(null)} className="mt-2 text-xs text-rose-500 hover:text-rose-400 underline">
+                          Clear
                         </button>
                      </div>
                  )}
-             </div>
-
-             {/* Elemental Overlay */}
-             <div>
-                <h3 className="font-semibold text-purple-400 mb-2 flex items-center gap-2 justify-between">
-                    <span className="flex items-center gap-2"><Droplets size={16} /> Biome Influence</span>
-                    <button 
-                        onClick={() => setShowOverlayMenu(!showOverlayMenu)}
-                        className="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300"
-                    >
-                        {showOverlayMenu ? 'Cancel' : 'Modify'}
-                    </button>
-                </h3>
-                
-                {showOverlayMenu && (
-                    <div className="grid grid-cols-3 gap-2 bg-slate-900 p-2 rounded border border-slate-800 animate-in slide-in-from-top-2">
-                        <button onClick={() => onApplyOverlay(hex, 'Infernal')} className="p-2 rounded bg-red-900/30 hover:bg-red-900/50 border border-red-900 flex flex-col items-center gap-1 text-red-400 text-[10px] uppercase font-bold">
-                            <Flame size={16} /> Infernal
-                        </button>
-                        <button onClick={() => onApplyOverlay(hex, 'Frozen')} className="p-2 rounded bg-sky-900/30 hover:bg-sky-900/50 border border-sky-900 flex flex-col items-center gap-1 text-sky-400 text-[10px] uppercase font-bold">
-                            <Snowflake size={16} /> Frozen
-                        </button>
-                        <button onClick={() => onApplyOverlay(hex, 'Necrotic')} className="p-2 rounded bg-purple-900/30 hover:bg-purple-900/50 border border-purple-900 flex flex-col items-center gap-1 text-purple-400 text-[10px] uppercase font-bold">
-                            <Skull size={16} /> Necrotic
-                        </button>
-                        <button onClick={() => onApplyOverlay(hex, 'Verdant')} className="p-2 rounded bg-green-900/30 hover:bg-green-900/50 border border-green-900 flex flex-col items-center gap-1 text-green-400 text-[10px] uppercase font-bold">
-                            <Leaf size={16} /> Verdant
-                        </button>
-                        <button onClick={() => onApplyOverlay(hex, 'Storm')} className="p-2 rounded bg-yellow-900/30 hover:bg-yellow-900/50 border border-yellow-900 flex flex-col items-center gap-1 text-yellow-400 text-[10px] uppercase font-bold">
-                            <Zap size={16} /> Storm
-                        </button>
-                        <button onClick={() => onApplyOverlay(hex, 'Arcane')} className="p-2 rounded bg-pink-900/30 hover:bg-pink-900/50 border border-pink-900 flex flex-col items-center gap-1 text-pink-400 text-[10px] uppercase font-bold">
-                            <Wand2 size={16} /> Arcane
-                        </button>
-                         <button onClick={() => onApplyOverlay(hex, null)} className="col-span-3 p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] uppercase font-bold mt-1">
-                            Clear Influence (Unmodify)
-                        </button>
-                    </div>
-                )}
              </div>
 
         </div>

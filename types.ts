@@ -8,7 +8,12 @@ export enum TerrainType {
   SETTLEMENT = 'Settlement',
   WATER = 'Water',
   DESERT = 'Desert',
-  EMPTY = 'Unexplored'
+  EMPTY = 'Unexplored',
+  
+  // Mutation Only Types
+  MAGMA = 'Magma Fields',
+  CRYSTAL = 'Crystal Spires',
+  FLOATING = 'Floating Islands'
 }
 
 export enum TerrainElement {
@@ -20,36 +25,68 @@ export enum TerrainElement {
   STANDARD = 'Standard'
 }
 
-export type ElementalOverlay = 'Infernal' | 'Frozen' | 'Necrotic' | 'Verdant' | 'Storm' | 'Arcane';
+export enum PlanarAlignment {
+  MATERIAL = 'Material', // Default/Center
+  FIRE = 'Plane of Fire',
+  WATER = 'Plane of Water',
+  AIR = 'Plane of Air',
+  EARTH = 'Plane of Earth',
+  POSITIVE = 'Positive Energy',
+  NEGATIVE = 'Negative Energy',
+  SCAR = 'The World Scar'
+}
 
 export type PartySpeed = 15 | 20 | 30 | 40 | 50;
 
-export interface HexEffect {
-  sourceGroupId: string; // The sector ID that originated this effect
-  type: ElementalOverlay;
-  strength: number; // 0.0 to 1.0
+export interface PlanarOverlay {
+  id: string;
+  type: PlanarAlignment;
+  coordinates: { x: number, y: number }; // Hex Coordinates (q, r)
+  radius: number; // In Hexes
+}
+
+export interface PlanarInfluence {
+  type: PlanarAlignment;
+  intensity: number; // 0.0 to 1.0
 }
 
 export interface HexData {
   id: string;
-  groupId?: string; // ID of the cluster this hex belongs to
+  groupId?: string; 
+  
+  // Current State (Visible)
   terrain: TerrainType;
   element: TerrainElement;
-  description?: string; // AI generated
+  description?: string; 
   travelTimeHours: number;
   explorationTimeDays: number;
   coordinates: { x: number, y: number };
   isExplored: boolean;
   notes: string;
-  color?: string; // Custom map color from imported data
-  icon?: string; // Custom icon override
-  isSectorPlaceholder?: boolean; // If true, this represents an entire ungenerated sector
+  color?: string; 
+  icon?: string; 
+  isSectorPlaceholder?: boolean; 
   
-  // Active elemental effects on this hex
-  effects?: HexEffect[];
+  // Base State (For reverting Planar Mutations)
+  baseTerrain: TerrainType;
+  baseDescription: string;
+
+  // Planar Data
+  planarAlignment?: PlanarAlignment; // Dominant alignment for Logic/Text
+  planarIntensity?: number; 
+  planarInfluences?: PlanarInfluence[]; // All active influences for Visual Blending
 }
 
 export interface TravelRuleResult {
   travelTime: number; // hours
   explorationTime: number; // days
+}
+
+export interface WorldGenConfig {
+  waterLevel: number; 
+  mountainLevel: number; 
+  vegetationLevel: number; 
+  riverDensity: number; 
+  ruggedness: number; 
+  seed: number;
 }

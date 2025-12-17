@@ -1,3 +1,4 @@
+
 import { MAP_CONFIG } from '../constants';
 
 // --- Shared Types ---
@@ -30,32 +31,53 @@ export const pixelToHex = (x: number, y: number): AxialCoord => {
     return axialRound(q, r);
 };
 
-/**
- * Converts Screen/World Pixels to Flat Top Axial Coordinates.
- * Used exclusively for hit-testing the Flat Top Sector Placeholders.
- */
-export const pixelToFlatHex = (x: number, y: number, scale: number): AxialCoord => {
-    // Flat Top: q = 2/3 x, r = -1/3 x + sqrt(3)/3 y
-    const size = MAP_CONFIG.HEX_SIZE * scale;
-    const q = (2/3 * x) / size;
-    const r = (-1/3 * x + Math.sqrt(3)/3 * y) / size;
-    return axialRound(q, r);
-};
+// --- Sector Geometry (Flat Top Layout) ---
 
 /**
  * Determines the center coordinate of a Sector based on its Grid ID (sq, sr).
- * Enforces the specific tiling logic for Flat Top Sectors on a Pointy Top Grid.
+ * Maps the Sector Grid (Flat Top, axes at 30° and 90°) to the Tile Grid (Pointy Top, axes at 0° and 60°).
+ * 
+ * Flat Top Axis 1 (SQ) -> Maps to Vector(1, 1) in Tile Grid (Angle 30°)
+ * Flat Top Axis 2 (SR) -> Maps to Vector(-1, 2) in Tile Grid (Angle 90°)
  */
 export const getSectorCenter = (sq: number, sr: number): AxialCoord => {
-    // Vector Basis for Pointy Top Map made of Flat Top Sectors
-    // We need vertical stacking for Flat Top sectors.
-    // k = SECTOR_SPACING.
-    // This specific linear combination ensures neighbors match the Flat Top tiling pattern.
-    const k = MAP_CONFIG.SECTOR_SPACING;
-    const q = k * (sq - sr);
-    const r = k * (sq + 2 * sr);
+    const s = MAP_CONFIG.SECTOR_SPACING;
     
-    return { q, r };
+    // Matrix transform:
+    // Q = SQ * 1 + SR * -1
+    // R = SQ * 1 + SR * 2
+    
+    return { 
+        q: (sq - sr) * s, 
+        r: (sq + 2 * sr) * s
+    };
+};
+
+/**
+ * Maps any Hex (q,r) to its owning Sector ID (sq, sr).
+ * Inverses the Flat Top layout transform.
+ */
+export const getSectorID = (q: number, r: number): AxialCoord => {
+    const s = MAP_CONFIG.SECTOR_SPACING;
+    
+    // Inverse Matrix (Determinant 3):
+    // SQ = (2Q + R) / 3
+    // SR = (R - Q) / 3
+    
+    const sqRaw = (2 * q + r) / (3 * s);
+    const srRaw = (r - q) / (3 * s);
+    
+    return axialRound(sqRaw, srRaw);
+};
+
+/**
+ * Returns the geometric radius (center to corner) required for Sectors to tessellate 
+ * in a Flat Top configuration.
+ * Distance between centers in this layout is S * 3 * hexSize (Length of vector (1,1) is 3).
+ * Radius = Distance / sqrt(3) = S * sqrt(3) * hexSize.
+ */
+export const getSectorRadius = (): number => {
+    return MAP_CONFIG.SECTOR_SPACING * Math.sqrt(3) * MAP_CONFIG.HEX_SIZE;
 };
 
 // --- Math Helpers ---

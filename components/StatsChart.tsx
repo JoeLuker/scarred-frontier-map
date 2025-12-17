@@ -2,7 +2,7 @@
 import React from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { HexData, TerrainType } from '../types';
-import { TERRAIN_COLORS } from '../constants';
+import { TERRAIN_COLORS } from '../theme';
 
 interface StatsChartProps {
   hexes: HexData[];

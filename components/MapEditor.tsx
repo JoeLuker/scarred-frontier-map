@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { HexData } from '../types';
 import { X, Copy, Check, Save, FileJson } from 'lucide-react';
@@ -25,10 +26,25 @@ export const MapEditor: React.FC<MapEditorProps> = ({ isOpen, onClose, hexes, on
   const handleSave = () => {
     try {
       const parsed = JSON.parse(json);
+      
+      // Validation Schema
       if (!Array.isArray(parsed)) {
         throw new Error("Root must be an array of HexData objects.");
       }
-      onImport(parsed);
+
+      parsed.forEach((hex: any, index: number) => {
+        if (!hex.id || typeof hex.id !== 'string') {
+            throw new Error(`Item at index ${index} is missing a valid 'id'.`);
+        }
+        if (!hex.coordinates || typeof hex.coordinates.x !== 'number' || typeof hex.coordinates.y !== 'number') {
+            throw new Error(`Item at index ${index} (ID: ${hex.id || 'unknown'}) has invalid coordinates. Must have x and y numbers.`);
+        }
+        if (!hex.terrain) {
+             throw new Error(`Item at index ${index} (ID: ${hex.id}) is missing 'terrain'.`);
+        }
+      });
+
+      onImport(parsed as HexData[]);
       onClose();
     } catch (e: any) {
       setError(e.message);
@@ -77,8 +93,8 @@ export const MapEditor: React.FC<MapEditorProps> = ({ isOpen, onClose, hexes, on
 
           {/* Footer / Actions */}
           <div className="p-4 border-t border-slate-800 bg-slate-800/50 flex items-center justify-between">
-             <div className="text-rose-400 text-sm font-mono">
-                {error && <span>Error: {error}</span>}
+             <div className="text-rose-400 text-sm font-mono flex-1 mr-4">
+                {error && <span className="flex items-center gap-1"><X size={14}/> {error}</span>}
              </div>
              <div className="flex gap-3">
                 <button 

@@ -1,5 +1,12 @@
+
 import { TerrainType, TerrainElement, PartySpeed, TravelRuleResult, HexData } from "../types";
-import { TRAVEL_TIME_TABLE, EXPLORATION_TIME_TABLE, getSlowerSpeed } from "../constants";
+import { 
+  TRAVEL_TIME_TABLE, 
+  EXPLORATION_TIME_TABLE, 
+  getSlowerSpeed, 
+  TERRAIN_GENERATION_TABLE,
+  ELEMENT_GENERATION_TABLE
+} from "../constants";
 
 export const calculateTravelStats = (
   speed: PartySpeed,
@@ -13,25 +20,33 @@ export const calculateTravelStats = (
     effectiveSpeed = getSlowerSpeed(speed);
   }
 
-  // Determine Travel Time (Hours)
-  const travelTimeEntry = TRAVEL_TIME_TABLE[effectiveSpeed];
-  let travelTime = terrain === TerrainType.PLAIN ? travelTimeEntry[0] : travelTimeEntry[1];
+  // Safe lookup for Travel Time
+  // If effectiveSpeed is somehow invalid (e.g. from corrupt JSON), fallback to 30
+  const travelTimeEntry = TRAVEL_TIME_TABLE[effectiveSpeed] || TRAVEL_TIME_TABLE[30];
+  
+  // Mapping new mutation terrains to physics equivalents
+  let physicsTerrain = terrain;
+  if (terrain === TerrainType.MAGMA) physicsTerrain = TerrainType.MOUNTAIN;
+  if (terrain === TerrainType.CRYSTAL) physicsTerrain = TerrainType.HILL;
+  if (terrain === TerrainType.FLOATING) physicsTerrain = TerrainType.MOUNTAIN;
+  
+  let travelTime = physicsTerrain === TerrainType.PLAIN ? travelTimeEntry[0] : travelTimeEntry[1];
 
   // Settlement bonus (reduce travel time by 25%)
   if (terrain === TerrainType.SETTLEMENT) {
     travelTime = travelTime * 0.75;
   }
 
-  // Determine Exploration Time (Days)
-  const explorationTimeEntry = EXPLORATION_TIME_TABLE[effectiveSpeed];
+  // Safe lookup for Exploration Time
+  const explorationTimeEntry = EXPLORATION_TIME_TABLE[effectiveSpeed] || EXPLORATION_TIME_TABLE[30];
   let explorationTime = 1;
 
-  if (terrain === TerrainType.PLAIN || terrain === TerrainType.HILL) {
+  if (physicsTerrain === TerrainType.PLAIN || physicsTerrain === TerrainType.HILL) {
     explorationTime = explorationTimeEntry[0];
-  } else if (terrain === TerrainType.MOUNTAIN) {
+  } else if (physicsTerrain === TerrainType.MOUNTAIN) {
     explorationTime = explorationTimeEntry[2];
   } else {
-    // Desert, Forest, Marsh
+    // Desert, Forest, Marsh, Magma, etc fall here
     explorationTime = explorationTimeEntry[1];
   }
   
@@ -48,30 +63,24 @@ export const calculateTravelStats = (
 export const rollD20 = (): number => Math.floor(Math.random() * 20) + 1;
 export const rollD100 = (): number => Math.floor(Math.random() * 100) + 1;
 
-export const generateRandomTerrain = (previousTerrain?: TerrainType): TerrainType => {
+// Generic helper to roll against a threshold table
+const rollFromTable = <T>(table: { threshold: number, result: T }[], fallback: T): T => {
   const roll = rollD20();
-  
-  if (roll <= 3) return TerrainType.FOREST;
-  if (roll <= 6) return TerrainType.HILL;
-  if (roll <= 8) return TerrainType.MARSH;
-  if (roll <= 10) return TerrainType.MOUNTAIN;
-  if (roll <= 13) return TerrainType.PLAIN;
-  if (roll === 14) return TerrainType.SETTLEMENT;
-  if (roll <= 16) return TerrainType.WATER;
-  
-  // 17-20: As previous. If no previous, default to Plain.
-  return previousTerrain || TerrainType.PLAIN;
+  for (const entry of table) {
+    if (roll <= entry.threshold) {
+      return entry.result;
+    }
+  }
+  return fallback;
+};
+
+export const generateRandomTerrain = (previousTerrain?: TerrainType): TerrainType => {
+  // Pass previous terrain as fallback for 17-20 range
+  return rollFromTable(TERRAIN_GENERATION_TABLE, previousTerrain || TerrainType.PLAIN);
 };
 
 export const generateRandomElement = (): TerrainElement => {
-  const roll = rollD20();
-
-  if (roll <= 3) return TerrainElement.DIFFICULT;
-  if (roll <= 6) return TerrainElement.FEATURE;
-  if (roll <= 10) return TerrainElement.HUNTING_GROUND;
-  if (roll <= 12) return TerrainElement.RESOURCE;
-  if (roll <= 14) return TerrainElement.SECRET;
-  return TerrainElement.STANDARD;
+  return rollFromTable(ELEMENT_GENERATION_TABLE, TerrainElement.STANDARD);
 };
 
 // Neighbors in axial coordinates (q, r)
@@ -84,18 +93,11 @@ export const getUnoccupiedNeighbor = (hexes: HexData[], centerHex: HexData | nul
     const occupiedMap = new Set(hexes.map(h => `${h.coordinates.x},${h.coordinates.y}`));
 
     // If no center hex, spiral out from 0,0 until we find an empty spot
-    let queue = centerHex ? [centerHex.coordinates] : [{x:0, y:0}];
-    if (!centerHex && occupiedMap.has("0,0")) {
-         // Logic if map is fully occupied at 0,0 handled by spiral below
-    } else if (!centerHex) {
-        return { x: 0, y: 0 };
+    if (!centerHex) {
+        if (!occupiedMap.has("0,0")) return { x: 0, y: 0 };
     }
 
     // Simple Breadth-First Search to find nearest empty spot
-    // If centerHex is provided, we specifically look for neighbors of THAT hex first.
-    // But for "Sandbox" generation, usually we want to append to the map. 
-    // Let's refine: We return a random empty neighbor of the centerHex.
-    
     if (centerHex) {
         const neighbors = DIRECTIONS.map(d => ({ x: centerHex.coordinates.x + d.x, y: centerHex.coordinates.y + d.y }));
         const emptyNeighbors = neighbors.filter(n => !occupiedMap.has(`${n.x},${n.y}`));
