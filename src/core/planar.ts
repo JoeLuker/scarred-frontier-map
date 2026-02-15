@@ -64,6 +64,32 @@ export const computeHexState = (hex: HexData, overlays: readonly PlanarOverlay[]
     };
   }
 
+  // Quick distance pre-check: skip full computation for hexes far from all overlays.
+  // EDGE_VARIATION + |EDGE_OFFSET| is the worst-case noise expansion of the radius.
+  const maxNoiseExpand = NOISE.EDGE_VARIATION + Math.abs(NOISE.EDGE_OFFSET);
+  let anyClose = false;
+  for (const overlay of overlays) {
+    if (getHexDistance(hex.coordinates, overlay.coordinates) <= overlay.radius + maxNoiseExpand) {
+      anyClose = true;
+      break;
+    }
+  }
+
+  if (!anyClose) {
+    // Hex is outside all overlay ranges — return base state, reusing ref if unchanged
+    if (hex.planarAlignment === PlanarAlignment.MATERIAL && hex.planarInfluences.length === 0) {
+      return hex;
+    }
+    return {
+      ...hex,
+      terrain: hex.baseTerrain,
+      description: hex.baseDescription,
+      planarAlignment: PlanarAlignment.MATERIAL,
+      planarIntensity: 0,
+      planarInfluences: [],
+    };
+  }
+
   const influences: PlanarInfluence[] = [];
   let maxIntensity = 0;
   let dominantPlane = PlanarAlignment.MATERIAL;
@@ -90,6 +116,21 @@ export const computeHexState = (hex: HexData, overlays: readonly PlanarOverlay[]
         }
       }
     }
+  }
+
+  // No overlay actually affected this hex (noise pushed edges inward)
+  if (influences.length === 0) {
+    if (hex.planarAlignment === PlanarAlignment.MATERIAL && hex.planarInfluences.length === 0) {
+      return hex;
+    }
+    return {
+      ...hex,
+      terrain: hex.baseTerrain,
+      description: hex.baseDescription,
+      planarAlignment: PlanarAlignment.MATERIAL,
+      planarIntensity: 0,
+      planarInfluences: [],
+    };
   }
 
   const { terrain, flavor } = mutateTerrainByPlane(

@@ -1,5 +1,7 @@
-import React, { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect, type RefObject } from 'react';
 import { RENDER } from '../../core/config';
+
+const ISO_TILT = RENDER.ISO_TILT;
 
 interface CameraState {
   x: number;
@@ -8,8 +10,8 @@ interface CameraState {
 }
 
 export const useCamera = (
-  canvasRef: React.RefObject<HTMLCanvasElement | null>,
-  containerRef: React.RefObject<HTMLDivElement | null>,
+  canvasRef: RefObject<HTMLCanvasElement | null>,
+  containerRef: RefObject<HTMLDivElement | null>,
 ) => {
   const camera = useRef<CameraState>({ x: 0, y: 0, zoom: 0.5 });
   const isDragging = useRef(false);
@@ -33,7 +35,7 @@ export const useCamera = (
       totalDragDistance.current += Math.abs(dx) + Math.abs(dy);
 
       camera.current.x += dx / camera.current.zoom;
-      camera.current.y += dy / camera.current.zoom;
+      camera.current.y += dy / (camera.current.zoom * ISO_TILT);
 
       lastMouse.current = { x: e.clientX, y: e.clientY };
     }
@@ -45,7 +47,7 @@ export const useCamera = (
     const cam = camera.current;
 
     const worldX = (mouseX - centerX) / cam.zoom - cam.x;
-    const worldY = (mouseY - centerY) / cam.zoom - cam.y;
+    const worldY = (mouseY - centerY) / (cam.zoom * ISO_TILT) - cam.y;
 
     return { worldX, worldY, isDragging: isDragging.current };
   }, [containerRef]);
@@ -55,7 +57,8 @@ export const useCamera = (
     if (canvasRef.current) canvasRef.current.style.cursor = 'default';
   }, [canvasRef]);
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
+  const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {});
+  handleWheelRef.current = (e: WheelEvent) => {
     e.preventDefault();
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -75,20 +78,32 @@ export const useCamera = (
     const Z1 = camera.current.zoom;
     const Z2 = newZoom;
 
+    // World point under cursor (inverse of isometric projection)
     const W = {
       x: (M.x - C.x) / Z1 - Cam1.x,
-      y: (M.y - C.y) / Z1 - Cam1.y,
+      y: (M.y - C.y) / (Z1 * ISO_TILT) - Cam1.y,
     };
 
+    // New camera offset to keep W under cursor at new zoom
     const Cam2 = {
       x: (M.x - C.x) / Z2 - W.x,
-      y: (M.y - C.y) / Z2 - W.y,
+      y: (M.y - C.y) / (Z2 * ISO_TILT) - W.y,
     };
 
     camera.current.zoom = newZoom;
     camera.current.x = Cam2.x;
     camera.current.y = Cam2.y;
-  }, [containerRef]);
+  };
+
+  // Attach wheel listener with { passive: false } to allow preventDefault
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onWheel = (e: WheelEvent) => handleWheelRef.current(e);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [canvasRef]);
 
   const setCamera = useCallback((x: number, y: number, zoom?: number) => {
     camera.current.x = x;
@@ -102,7 +117,6 @@ export const useCamera = (
     handleMouseDown,
     handleMouseMove,
     handleMouseUp,
-    handleWheel,
     setCamera,
   };
 };

@@ -1,42 +1,63 @@
-import React, { useState } from 'react';
-import { PlanarAlignment } from '../core/types';
+import React, { useState, useRef, useCallback } from 'react';
+import { PlanarAlignment, HexData, WorldGenConfig } from '../core/types';
 import { HexGrid } from './components/HexGrid';
 import { CurrentHex } from './components/CurrentHex';
-import { MapEditor } from './components/MapEditor';
-import { WorldWizard } from './components/WorldWizard';
+import { WorldGenBar } from './components/WorldGenBar';
 import { WorldSidebar } from './components/WorldSidebar';
-import { PlanarManager } from './components/PlanarManager';
-import { Loader2 } from 'lucide-react';
 import { useWorldState } from './hooks/useWorldState';
+import { useBridgeReceiver } from '../bridge/useBridgeReceiver';
 
 const App: React.FC = () => {
   const {
     hexes,
     selectedHex,
     focusedHex,
-    isGenerating,
+    worldConfig,
     planarOverlays,
-    history,
+    actions,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
+    removeAction,
+    dispatch,
+    previewWorldConfig,
+    cancelPreview,
+    modifyOverlay,
+    commitOverlayModification,
     updateHex,
     selectHex,
     focusRegion,
     importMap,
     handleHexClick,
-    generateWorld,
     revealAll,
     addOverlay,
     removeOverlay,
-    modifyOverlay,
-    commitOverlayModification,
-    undo,
-    redo,
   } = useWorldState();
 
-  const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [isWizardOpen, setIsWizardOpen] = useState(false);
-  const [isPlanarManagerOpen, setIsPlanarManagerOpen] = useState(false);
+  useBridgeReceiver({ hexes, planarOverlays, dispatch, focusRegion });
 
-  const handleAddPlane = (type: PlanarAlignment) => {
+  const [isGenBarOpen, setIsGenBarOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleOpenGenBar = useCallback(() => {
+    setIsGenBarOpen(true);
+  }, []);
+
+  const handleCheckpoint = useCallback((config: WorldGenConfig, preserveExplored: boolean) => {
+    dispatch({ type: 'worldConfig', config, preserveExplored });
+  }, [dispatch]);
+
+  const handleCancelGenBar = useCallback(() => {
+    cancelPreview();
+    setIsGenBarOpen(false);
+  }, [cancelPreview]);
+
+  const handleCloseGenBar = useCallback(() => {
+    setIsGenBarOpen(false);
+  }, []);
+
+  const handleAddPlane = useCallback((type: PlanarAlignment) => {
     const center = focusedHex ? focusedHex.coordinates : { q: 0, r: 0 };
     addOverlay({
       id: `PLANE-${Date.now()}`,
@@ -44,78 +65,120 @@ const App: React.FC = () => {
       coordinates: center,
       radius: 5,
     });
-  };
+  }, [focusedHex, addOverlay]);
+
+  const handleExport = useCallback(() => {
+    const data = JSON.stringify(hexes, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `scarred-frontier-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [hexes]);
+
+  const handleImport = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed: unknown = JSON.parse(event.target?.result as string);
+        if (Array.isArray(parsed)) {
+          importMap(parsed as HexData[]);
+        }
+      } catch (err) {
+        console.error('Failed to import map:', err);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }, [importMap]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-950 text-slate-200 font-sans selection:bg-amber-500/30">
 
+      {/* Canvas — always full viewport */}
       <div className="absolute inset-0 z-0">
         <HexGrid
           hexes={hexes}
+          worldConfig={worldConfig}
           onHexClick={handleHexClick}
           focusedHex={focusedHex}
           planarOverlays={planarOverlays}
           onModifyOverlay={modifyOverlay}
           onCommitOverlay={commitOverlayModification}
-          showGizmos={isPlanarManagerOpen}
+          showGizmos={planarOverlays.length > 0}
         />
       </div>
 
-      <div className="absolute top-4 left-4 bottom-4 z-20 pointer-events-none flex flex-col justify-center">
-        <div className="pointer-events-auto h-full flex">
+      {/* UI overlay — flex layout, panels are structurally aware of each other */}
+      <div className="absolute inset-0 z-10 flex pointer-events-none">
+
+        {/* Left sidebar */}
+        <div className="shrink-0 p-4">
           <WorldSidebar
             hexes={hexes}
             onFocusRegion={focusRegion}
-            onOpenWizard={() => setIsWizardOpen(true)}
-            onOpenEditor={() => setIsEditorOpen(true)}
+            onToggleGenBar={handleOpenGenBar}
+            isGenBarOpen={isGenBarOpen}
+            onExport={handleExport}
+            onImport={handleImport}
             onRevealAll={revealAll}
-            isGenerating={isGenerating}
-            onTogglePlanarManager={() => setIsPlanarManagerOpen(!isPlanarManagerOpen)}
             onUndo={undo}
             onRedo={redo}
-            canUndo={history.past.length > 0}
-            canRedo={history.future.length > 0}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            actions={actions}
+            onRemoveAction={removeAction}
+            overlays={planarOverlays}
+            onAddPlane={handleAddPlane}
+            onRemoveOverlay={removeOverlay}
+            onModifyOverlay={modifyOverlay}
           />
+        </div>
+
+        {/* Center column — spacer + bottom bar */}
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1" />
+          {isGenBarOpen && (
+            <div className="pointer-events-auto">
+              <WorldGenBar
+                initialConfig={worldConfig}
+                onPreview={previewWorldConfig}
+                onCheckpoint={handleCheckpoint}
+                onCancel={handleCancelGenBar}
+                onClose={handleCloseGenBar}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Right panel — hex details */}
+        <div className={`shrink-0 overflow-hidden transition-all duration-300 ease-in-out ${selectedHex ? 'w-[336px] p-4' : 'w-0'}`}>
+          <div className="w-80 h-full pointer-events-auto">
+            <CurrentHex
+              hex={selectedHex}
+              onUpdateHex={updateHex}
+              onClose={() => selectHex(null)}
+            />
+          </div>
         </div>
       </div>
 
-      <PlanarManager
-        isOpen={isPlanarManagerOpen}
-        onClose={() => setIsPlanarManagerOpen(false)}
-        overlays={planarOverlays}
-        onAdd={handleAddPlane}
-        onRemove={removeOverlay}
-        onModify={modifyOverlay}
-      />
-
-      <div className={`absolute top-4 right-4 bottom-4 w-80 z-20 transition-transform duration-300 ease-in-out pointer-events-none ${selectedHex ? 'translate-x-0' : 'translate-x-[120%]'}`}>
-        <div className="h-full pointer-events-auto">
-          <CurrentHex
-            hex={selectedHex}
-            onUpdateHex={updateHex}
-            onClose={() => selectHex(null)}
-          />
-        </div>
-      </div>
-
-      {isGenerating && (
-        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50 bg-indigo-600 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-4">
-          <Loader2 className="animate-spin" size={20} />
-          <span className="font-bold tracking-wide">Forging Landscape...</span>
-        </div>
-      )}
-
-      <MapEditor
-        isOpen={isEditorOpen}
-        onClose={() => setIsEditorOpen(false)}
-        hexes={hexes}
-        onImport={importMap}
-      />
-
-      <WorldWizard
-        isOpen={isWizardOpen}
-        onClose={() => setIsWizardOpen(false)}
-        onGenerate={(config, preserve) => generateWorld(config, preserve)}
+      {/* Hidden file input for import */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={handleFileChange}
       />
     </div>
   );

@@ -17,7 +17,9 @@
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-basic-ssl": "^2.1.4",
     "@vitejs/plugin-react": "^5.0.0",
+    "@webgpu/types": "^0.1.69",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }

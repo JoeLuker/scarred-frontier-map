@@ -69,6 +69,9 @@ export interface HexData {
   isExplored: boolean;
   notes: string;
 
+  // Terrain elevation (0-1 continuous value from noise)
+  elevation: number;
+
   // Base State (For reverting Planar Mutations)
   readonly baseTerrain: TerrainType;
   readonly baseDescription: string;
@@ -93,3 +96,22 @@ export interface MutationRule {
   readonly flavorPrimary: string;
   readonly flavorSecondary: string;
 }
+
+// --- Action-based history ---
+
+export interface WorldState {
+  readonly hexes: HexData[];
+  readonly overlays: PlanarOverlay[];
+  readonly config: WorldGenConfig;
+}
+
+export type HistoryAction =
+  | { readonly type: 'generateWorld'; readonly config: WorldGenConfig }
+  | { readonly type: 'worldConfig'; readonly config: WorldGenConfig; readonly preserveExplored: boolean }
+  | { readonly type: 'revealSector'; readonly groupId: string }
+  | { readonly type: 'revealAll' }
+  | { readonly type: 'updateHex'; readonly hexId: string; readonly changes: Partial<HexData> }
+  | { readonly type: 'addOverlay'; readonly overlay: PlanarOverlay }
+  | { readonly type: 'removeOverlay'; readonly overlayId: string }
+  | { readonly type: 'modifyOverlay'; readonly overlay: PlanarOverlay }
+  | { readonly type: 'importMap'; readonly hexes: HexData[] }

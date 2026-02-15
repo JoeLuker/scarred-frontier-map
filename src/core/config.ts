@@ -9,10 +9,9 @@ import {
 
 export const WORLD = {
   HEX_SIZE: 50,
-  SECTOR_SIZE: 4,
-  SECTOR_SPACING: 6,
-  WORLD_RADIUS_SECTORS: 6,
-  BRIDGE_RADIUS: 3,
+  GRID_RADIUS: 66,           // Hex grid radius (~13,000 hexes)
+  START_RADIUS: 8,           // Center hexes start explored
+  RING_WIDTH: 5,             // Ring width for fog-of-war reveal groups
   HISTORY_LIMIT: 20,
 } as const;
 
@@ -50,19 +49,35 @@ export const BIOME = {
   GLOBAL_FEATURE: 0.96,
   GLOBAL_RESOURCE: 0.93,
 
-  // Terrain noise
-  BASE_SCALE: 0.04,
-  KARST_BASE: 2.0,
-  MOISTURE_FREQ_MULT: 1.5,
-  RAIN_SHADOW_ELEV: 0.6,
-  RAIN_SHADOW_VALUE: -0.3,
-  VEG_SHIFT_RANGE: 0.5,
-  RIVER_FREQ: 0.08,
-  RIVER_THRESHOLD_MULT: 0.04,
-  SEA_LEVEL_MULT: 0.6,
-  MOUNTAIN_HIGH: 0.9,
-  MOUNTAIN_RANGE: 0.6,
-  HILL_OFFSET: 0.15,
+  // Layered elevation model — noise scales
+  CONTINENTAL_SCALE: 0.012,   // Very low freq: large landmasses vs ocean basins
+  RIDGE_SCALE: 0.025,         // Mid freq: coherent mountain ranges
+  DETAIL_SCALE: 0.07,         // High freq: local hills and dips
+
+  // Layered elevation model — layer weights
+  CONTINENTAL_WEIGHT: 0.55,
+  RIDGE_WEIGHT: 0.35,         // Scaled by mountainLevel slider
+  DETAIL_WEIGHT: 0.10,        // Scaled by ruggedness slider
+
+  // Slider-driven thresholds
+  SEA_LEVEL_MIN: 0.15,        // Sea level at waterLevel=0
+  SEA_LEVEL_RANGE: 0.35,      // Sea level at waterLevel=1 → 0.50
+  MOUNTAIN_THRESHOLD_BASE: 0.85, // Mountain threshold at mountainLevel=0
+  MOUNTAIN_THRESHOLD_RANGE: 0.25, // Mountain threshold at mountainLevel=1 → 0.60
+  HILL_OFFSET: 0.15,          // Hills form this far below mountain threshold
+
+  // Moisture model
+  MOISTURE_SCALE: 0.03,       // Spatial moisture noise frequency
+  MOISTURE_NOISE_WEIGHT: 0.4, // Weight of independent noise
+  COASTAL_WEIGHT: 0.4,        // Weight of elevation-derived coastal proximity
+  VEG_BIAS_WEIGHT: 0.2,       // Weight of vegetation slider bias
+
+  // River detection
+  RIVER_SCALE: 0.05,          // River noise frequency
+  RIVER_WARP_AMOUNT: 3.0,     // Domain warp strength for organic meandering
+  RIVER_SENSITIVITY: 0.08,    // Valley detection threshold (scaled by riverDensity)
+  RIVER_MIN_ELEV: 0.05,       // Min elevation above sea level for rivers
+  RIVER_HIGH_ELEV: 0.15,      // Min distance below mountain threshold for rivers
 
   // Moisture biome boundaries
   MOISTURE_DESERT: 0.3,
@@ -95,6 +110,16 @@ export const RENDER = {
   ZOOM_SIMPLE_FOG: 0.20,
   ZOOM_BEVEL: 0.4,
   ZOOM_FOG_FILL: 0.5,
+  // 2.5D height
+  ISO_TILT: 0.6,                 // Isometric foreshortening factor (0 = side, 1 = top-down)
+  HEIGHT_SCALE: 4.0,             // Max height offset as fraction of HEX_SIZE
+  HEIGHT_DEPTH_FACTOR: 0.15,     // Depth buffer offset per unit height
+  SIDE_DARKEN: 0.35,             // Side face color multiplier (darker = more depth)
+  BEVEL_INNER: 0.80,             // Bevel highlight starts at this distance from center
+  BEVEL_OUTER: 0.92,             // Bevel highlight ends at this distance
+  BEVEL_STRENGTH: 0.12,          // White highlight intensity
+  FOG_WHITE_MIX: 0.04,           // Fog overlay white tint (similar to UNEXPLORED_FOG_ALPHA)
+
   ZOOM_MIN: 0.05,
   ZOOM_MAX: 3.0,
   ZOOM_SCALE_FACTOR: 1.1,

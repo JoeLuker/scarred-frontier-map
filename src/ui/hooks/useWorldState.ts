@@ -1,207 +1,294 @@
-import { useState, useCallback, useEffect } from 'react';
-import { HexData, WorldGenConfig, PlanarOverlay, PlanarAlignment } from '../../core/types';
-import { DEFAULT_WORLD_CONFIG, WORLD } from '../../core/config';
-import { generateWorld, revealSector, revealAll, regenerateUnexplored } from '../../core/world';
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { HexData, WorldGenConfig, PlanarOverlay, PlanarAlignment, HistoryAction, WorldState } from '../../core/types';
+import { DEFAULT_WORLD_CONFIG } from '../../core/config';
+import { regenerateTerrain } from '../../core/world';
 import { applyOverlaysToMap } from '../../core/planar';
+import { applyAction, EMPTY_STATE, replayFrom } from '../../core/history';
+import { getGpuContext, TerrainCompute, terrainFromId, elementFromId, flavorFromId } from '../../gpu';
 
-interface HistorySnapshot {
-  hexes: HexData[];
-  overlays: PlanarOverlay[];
-}
+const INITIAL_ACTION: HistoryAction = { type: 'generateWorld', config: DEFAULT_WORLD_CONFIG };
+const INITIAL_STATE = applyAction(EMPTY_STATE, INITIAL_ACTION);
 
-interface HistoryState {
-  past: HistorySnapshot[];
-  future: HistorySnapshot[];
+interface History {
+  actions: HistoryAction[];
+  cache: WorldState[];       // cache[i] = state after actions[0..i]
+  redoStack: HistoryAction[];
 }
 
 export const useWorldState = () => {
-  const [hexes, setHexes] = useState<HexData[]>([]);
-  const [worldConfig, setWorldConfig] = useState<WorldGenConfig>(DEFAULT_WORLD_CONFIG);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [planarOverlays, setPlanarOverlays] = useState<PlanarOverlay[]>([]);
+  // --- History (committed action log + cached states) ---
+  const [history, setHistory] = useState<History>({
+    actions: [INITIAL_ACTION],
+    cache: [INITIAL_STATE],
+    redoStack: [],
+  });
+  const historyRef = useRef(history);
+  historyRef.current = history;
 
-  const [history, setHistory] = useState<HistoryState>({ past: [], future: [] });
+  // Live state: what the UI renders. Equals committed state except during preview/drag.
+  const [liveState, setLiveState] = useState<WorldState>(INITIAL_STATE);
+  const liveStateRef = useRef(liveState);
+  liveStateRef.current = liveState;
 
+  // --- UI State ---
   const [selectedHexId, setSelectedHexId] = useState<string | null>(null);
   const [focusedHex, setFocusedHex] = useState<HexData | null>(null);
 
+  // --- Derived ---
+  const hexes = liveState.hexes;
+  const planarOverlays = liveState.overlays;
+  const worldConfig = liveState.config;
   const selectedHex = hexes.find(h => h.id === selectedHexId) ?? null;
+  const canUndo = history.actions.length > 1;
+  const canRedo = history.redoStack.length > 0;
 
-  // Initial Load
-  useEffect(() => {
-    const initialMap = generateWorld(DEFAULT_WORLD_CONFIG);
-    const processedMap = applyOverlaysToMap(initialMap, []);
-    setHexes(processedMap);
-  }, []);
+  // --- Dispatch: commit an action to history ---
+  const dispatch = useCallback((action: HistoryAction) => {
+    const h = historyRef.current;
+    const prevState = h.cache[h.cache.length - 1] ?? EMPTY_STATE;
+    const newState = applyAction(prevState, action);
 
-  // --- History Management ---
-
-  const saveToHistory = useCallback((currentHexes: HexData[], currentOverlays: PlanarOverlay[]) => {
-    setHistory(prev => {
-      const newPast = [...prev.past, { hexes: currentHexes, overlays: currentOverlays }];
-      if (newPast.length > WORLD.HISTORY_LIMIT) newPast.shift();
-      return {
-        past: newPast,
-        future: [],
-      };
+    setHistory({
+      actions: [...h.actions, action],
+      cache: [...h.cache, newState],
+      redoStack: [],
     });
+    setLiveState(newState);
   }, []);
 
+  // --- Undo / Redo ---
   const undo = useCallback(() => {
-    setHistory(prev => {
-      if (prev.past.length === 0) return prev;
+    const h = historyRef.current;
+    if (h.actions.length <= 1) return;
 
-      const previous = prev.past[prev.past.length - 1];
-      if (!previous) return prev;
-      const newPast = prev.past.slice(0, -1);
+    const undone = h.actions[h.actions.length - 1]!;
+    const newActions = h.actions.slice(0, -1);
+    const newCache = h.cache.slice(0, -1);
+    const newState = newCache[newCache.length - 1] ?? EMPTY_STATE;
 
-      setHexes(previous.hexes);
-      setPlanarOverlays(previous.overlays);
-
-      return {
-        past: newPast,
-        future: [{ hexes, overlays: planarOverlays }, ...prev.future],
-      };
+    setHistory({
+      actions: newActions,
+      cache: newCache,
+      redoStack: [undone, ...h.redoStack],
     });
-  }, [hexes, planarOverlays]);
+    setLiveState(newState);
+  }, []);
 
   const redo = useCallback(() => {
-    setHistory(prev => {
-      if (prev.future.length === 0) return prev;
+    const h = historyRef.current;
+    if (h.redoStack.length === 0) return;
 
-      const next = prev.future[0];
-      if (!next) return prev;
-      const newFuture = prev.future.slice(1);
+    const action = h.redoStack[0]!;
+    const prevState = h.cache[h.cache.length - 1] ?? EMPTY_STATE;
+    const newState = applyAction(prevState, action);
 
-      setHexes(next.hexes);
-      setPlanarOverlays(next.overlays);
-
-      return {
-        past: [...prev.past, { hexes, overlays: planarOverlays }],
-        future: newFuture,
-      };
+    setHistory({
+      actions: [...h.actions, action],
+      cache: [...h.cache, newState],
+      redoStack: h.redoStack.slice(1),
     });
-  }, [hexes, planarOverlays]);
-
-  // --- Planar Management ---
-
-  const updateOverlays = useCallback((newOverlays: PlanarOverlay[]) => {
-    setPlanarOverlays(newOverlays);
-    setHexes(prevHexes => applyOverlaysToMap(prevHexes, newOverlays));
+    setLiveState(newState);
   }, []);
 
-  const addOverlay = useCallback((overlay: PlanarOverlay) => {
-    saveToHistory(hexes, planarOverlays);
-    const newOverlays = [...planarOverlays, overlay];
-    updateOverlays(newOverlays);
-  }, [planarOverlays, hexes, updateOverlays, saveToHistory]);
+  // --- Remove a specific action (selective undo) ---
+  const removeAction = useCallback((index: number) => {
+    const h = historyRef.current;
+    if (index <= 0 || index >= h.actions.length) return;
 
-  const removeOverlay = useCallback((id: string) => {
-    saveToHistory(hexes, planarOverlays);
-    const newOverlays = planarOverlays.filter(o => o.id !== id);
-    updateOverlays(newOverlays);
-  }, [planarOverlays, hexes, updateOverlays, saveToHistory]);
+    const newActions = [...h.actions.slice(0, index), ...h.actions.slice(index + 1)];
+    const baseState = h.cache[index - 1] ?? EMPTY_STATE;
+    const replayedCache = replayFrom(baseState, newActions, index);
+    const newCache = [...h.cache.slice(0, index), ...replayedCache];
+    const newState = newCache[newCache.length - 1] ?? EMPTY_STATE;
+
+    setHistory({ actions: newActions, cache: newCache, redoStack: [] });
+    setLiveState(newState);
+  }, []);
+
+  // --- GPU Compute (async init, shared device singleton) ---
+
+  const gpuComputeRef = useRef<TerrainCompute | null>(null);
+  const gpuCoordsCountRef = useRef(0); // Track uploaded coord count
+  const previewGenRef = useRef(0);     // Race condition guard
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const ctx = await getGpuContext();
+      if (cancelled || !ctx) return;
+      try {
+        const compute = TerrainCompute.create(ctx.device, 20000);
+        // Upload initial hex coordinates
+        const hexes = historyRef.current.cache[historyRef.current.cache.length - 1]?.hexes ?? [];
+        if (hexes.length > 0) {
+          compute.setCoords(hexes.map(h => h.coordinates));
+          gpuCoordsCountRef.current = hexes.length;
+        }
+        gpuComputeRef.current = compute;
+        console.log(`GPU terrain compute initialized (${hexes.length} hexes)`);
+      } catch (err) {
+        console.warn('GPU compute init failed, using CPU fallback:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      gpuComputeRef.current?.destroy();
+      gpuComputeRef.current = null;
+    };
+  }, []);
+
+  // --- Live Preview (no history entry) ---
+
+  const previewWorldConfig = useCallback((config: WorldGenConfig, preserveExplored: boolean) => {
+    const committed = historyRef.current.cache[historyRef.current.cache.length - 1] ?? EMPTY_STATE;
+    const compute = gpuComputeRef.current;
+
+    if (compute && committed.hexes.length > 0) {
+      // Ensure coords are uploaded (re-upload if hex count changed)
+      if (gpuCoordsCountRef.current !== committed.hexes.length) {
+        compute.setCoords(committed.hexes.map(h => h.coordinates));
+        gpuCoordsCountRef.current = committed.hexes.length;
+      }
+
+      // GPU async path with race condition guard
+      const gen = ++previewGenRef.current;
+      compute.generate(config, committed.hexes.length).then(results => {
+        if (gen !== previewGenRef.current) return; // stale — newer preview superseded this one
+
+        const newHexes = committed.hexes.map((hex, i) => {
+          if (preserveExplored && hex.isExplored) return { ...hex };
+
+          const r = results[i]!;
+          const terrain = terrainFromId(r.terrainId);
+          const element = elementFromId(r.elementId);
+          const flavor = flavorFromId(r.flavorId);
+          return {
+            ...hex,
+            terrain,
+            element,
+            elevation: r.elevation,
+            description: flavor,
+            baseDescription: flavor,
+            baseTerrain: terrain,
+            planarAlignment: PlanarAlignment.MATERIAL,
+            planarIntensity: 0,
+            planarInfluences: [],
+          };
+        });
+        const withOverlays = applyOverlaysToMap(newHexes, committed.overlays);
+        setLiveState({ hexes: withOverlays, overlays: committed.overlays, config });
+      });
+    } else {
+      // CPU sync fallback
+      const regenned = regenerateTerrain(committed.hexes, config, preserveExplored);
+      const withOverlays = applyOverlaysToMap(regenned, committed.overlays);
+      setLiveState({ hexes: withOverlays, overlays: committed.overlays, config });
+    }
+  }, []);
+
+  const pendingOverlayRef = useRef<PlanarOverlay | null>(null);
 
   const modifyOverlay = useCallback((updated: PlanarOverlay) => {
-    const newOverlays = planarOverlays.map(o => o.id === updated.id ? updated : o);
-    updateOverlays(newOverlays);
-  }, [planarOverlays, updateOverlays]);
+    pendingOverlayRef.current = updated;
+    setLiveState(prev => {
+      const overlays = prev.overlays.map(o => o.id === updated.id ? updated : o);
+      const withOverlays = applyOverlaysToMap(prev.hexes, overlays);
+      return { ...prev, hexes: withOverlays, overlays };
+    });
+  }, []);
+
+  const cancelPreview = useCallback(() => {
+    const committed = historyRef.current.cache[historyRef.current.cache.length - 1] ?? EMPTY_STATE;
+    setLiveState(committed);
+  }, []);
+
+  // --- Commit live changes ---
 
   const commitOverlayModification = useCallback(() => {
-    saveToHistory(hexes, planarOverlays);
-  }, [hexes, planarOverlays, saveToHistory]);
+    if (pendingOverlayRef.current) {
+      dispatch({ type: 'modifyOverlay', overlay: pendingOverlayRef.current });
+      pendingOverlayRef.current = null;
+    }
+  }, [dispatch]);
 
-  // --- Actions ---
+  // --- Convenience wrappers ---
+
+  const addOverlay = useCallback((overlay: PlanarOverlay) => {
+    dispatch({ type: 'addOverlay', overlay });
+  }, [dispatch]);
+
+  const removeOverlay = useCallback((id: string) => {
+    dispatch({ type: 'removeOverlay', overlayId: id });
+  }, [dispatch]);
 
   const updateHex = useCallback((updatedHex: HexData) => {
-    setHexes(prev => prev.map(h => h.id === updatedHex.id ? updatedHex : h));
-  }, []);
+    // TODO: For truly correct selective removal, store only changed fields.
+    // Currently stores full hex — fine for linear undo, edge-case wrong for
+    // selective removal of interleaved edits on the same hex.
+    dispatch({ type: 'updateHex', hexId: updatedHex.id, changes: updatedHex });
+  }, [dispatch]);
+
+  const revealAllHexes = useCallback(() => {
+    dispatch({ type: 'revealAll' });
+  }, [dispatch]);
+
+  const importMap = useCallback((newHexes: HexData[]) => {
+    dispatch({ type: 'importMap', hexes: newHexes });
+  }, [dispatch]);
+
+  // --- UI ---
 
   const selectHex = useCallback((id: string | null) => {
     setSelectedHexId(id);
   }, []);
 
   const focusRegion = useCallback((regionId: string) => {
-    const target = hexes.find(h => h.groupId === regionId);
+    const target = liveStateRef.current.hexes.find(h => h.groupId === regionId);
     if (target) setFocusedHex(target);
-  }, [hexes]);
-
-  const importMap = useCallback((newHexes: HexData[]) => {
-    saveToHistory(hexes, planarOverlays);
-    setHexes(newHexes);
-    setSelectedHexId(null);
-  }, [hexes, planarOverlays, saveToHistory]);
-
-  // --- Complex Actions ---
+  }, []);
 
   const handleHexClick = useCallback((hex: HexData) => {
     if (!hex.isExplored) {
       if (!hex.groupId) return;
-
-      const updatedHexes = revealSector(hex.groupId, hexes);
-      const finalHexes = applyOverlaysToMap(updatedHexes, planarOverlays);
-
-      setHexes(finalHexes);
+      dispatch({ type: 'revealSector', groupId: hex.groupId });
       return;
     }
-
     setSelectedHexId(hex.id);
-  }, [hexes, planarOverlays]);
-
-  const handleGenerateWorld = useCallback((config: WorldGenConfig, preserveExplored: boolean = false) => {
-    setIsGenerating(true);
-    saveToHistory(hexes, planarOverlays);
-
-    setWorldConfig(config);
-
-    let newHexes: HexData[];
-
-    if (preserveExplored) {
-      const updatedBaseMap = regenerateUnexplored(hexes, config);
-      newHexes = applyOverlaysToMap(updatedBaseMap, planarOverlays);
-    } else {
-      newHexes = generateWorld(config);
-      setPlanarOverlays([]);
-    }
-
-    setHexes(newHexes);
-    setSelectedHexId(null);
-    setIsGenerating(false);
-  }, [hexes, planarOverlays, saveToHistory]);
-
-  const handleRevealAll = useCallback(() => {
-    if (isGenerating) return;
-    setIsGenerating(true);
-    const fullMap = revealAll(hexes);
-    const finalMap = applyOverlaysToMap(fullMap, planarOverlays);
-    setHexes(finalMap);
-    setIsGenerating(false);
-  }, [isGenerating, hexes, planarOverlays]);
+  }, [dispatch]);
 
   return {
+    // State
     hexes,
     selectedHex,
     focusedHex,
     worldConfig,
-    isGenerating,
     planarOverlays,
-    history,
 
-    updateHex,
-    selectHex,
-    focusRegion,
-    importMap,
-
-    addOverlay,
-    removeOverlay,
-    modifyOverlay,
-    commitOverlayModification,
-
+    // History
+    actions: history.actions,
+    canUndo,
+    canRedo,
     undo,
     redo,
+    removeAction,
+    dispatch,
 
+    // Live preview
+    previewWorldConfig,
+    modifyOverlay,
+    cancelPreview,
+    commitOverlayModification,
+
+    // Committed convenience wrappers
+    addOverlay,
+    removeOverlay,
+    updateHex,
+    revealAll: revealAllHexes,
+    importMap,
+
+    // UI
+    selectHex,
+    focusRegion,
     handleHexClick,
-    generateWorld: handleGenerateWorld,
-    revealAll: handleRevealAll,
   };
 };
