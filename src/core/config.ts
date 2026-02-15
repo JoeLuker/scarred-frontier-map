@@ -110,11 +110,10 @@ export const RENDER = {
   ZOOM_SIMPLE_FOG: 0.20,
   ZOOM_BEVEL: 0.4,
   ZOOM_FOG_FILL: 0.5,
-  // 2.5D height
-  ISO_TILT: 0.6,                 // Isometric foreshortening factor (0 = side, 1 = top-down)
-  HEIGHT_SCALE: 4.0,             // Max height offset as fraction of HEX_SIZE
-  HEIGHT_DEPTH_FACTOR: 0.15,     // Depth buffer offset per unit height
-  SIDE_DARKEN: 0.35,             // Side face color multiplier (darker = more depth)
+  // 3D height
+  HEIGHT_SCALE: 12.0,            // Max height offset as fraction of HEX_SIZE
+  SIDE_DARKEN: 0.3,              // Side face color multiplier at cliff top
+  CLIFF_BASE_DARKEN: 0.12,       // Side face color multiplier at cliff base
   BEVEL_INNER: 0.80,             // Bevel highlight starts at this distance from center
   BEVEL_OUTER: 0.92,             // Bevel highlight ends at this distance
   BEVEL_STRENGTH: 0.12,          // White highlight intensity
@@ -134,6 +133,23 @@ export const RENDER = {
   UNEXPLORED_FOG_ALPHA: 0.03,
   PLANAR_TINT_WEIGHT: 0.6,
   FOG_TINT_MULT: 0.3,
+} as const;
+
+// --- 3D Camera ---
+
+export const CAMERA = {
+  FOV: Math.PI / 3,              // 60° vertical field of view
+  NEAR: 10,
+  FAR: 20000,
+  DEFAULT_DISTANCE: 3000,
+  DEFAULT_ELEVATION: Math.PI / 4, // 45° tilt
+  DEFAULT_AZIMUTH: 0,
+  ORBIT_SPEED: 0.005,
+  PAN_SPEED: 0.002,
+  ZOOM_MIN: 200,
+  ZOOM_MAX: 15000,
+  ZOOM_FACTOR: 1.08,
+  DRAG_THRESHOLD: 5,
 } as const;
 
 // --- Planar Mutation Rules ---

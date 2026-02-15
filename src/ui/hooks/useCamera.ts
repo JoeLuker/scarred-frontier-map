@@ -1,25 +1,33 @@
 import { useRef, useCallback, useEffect, type RefObject } from 'react';
-import { RENDER } from '../../core/config';
-
-const ISO_TILT = RENDER.ISO_TILT;
-
-interface CameraState {
-  x: number;
-  y: number;
-  zoom: number;
-}
+import { CAMERA } from '../../core/config';
+import type { OrbitalCamera } from '../../gpu';
+import { getViewProjection, screenToGround } from '../../gpu';
 
 export const useCamera = (
   canvasRef: RefObject<HTMLCanvasElement | null>,
   containerRef: RefObject<HTMLDivElement | null>,
 ) => {
-  const camera = useRef<CameraState>({ x: 0, y: 0, zoom: 0.5 });
+  const camera = useRef<OrbitalCamera>({
+    azimuth: CAMERA.DEFAULT_AZIMUTH,
+    elevation: CAMERA.DEFAULT_ELEVATION,
+    distance: CAMERA.DEFAULT_DISTANCE,
+    targetX: 0,
+    targetZ: 0,
+  });
+
   const isDragging = useRef(false);
+  const isOrbiting = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
   const totalDragDistance = useRef(0);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    isDragging.current = true;
+    if (e.button === 2) {
+      // Right-click: orbit
+      isOrbiting.current = true;
+    } else {
+      // Left-click: pan
+      isDragging.current = true;
+    }
     lastMouse.current = { x: e.clientX, y: e.clientY };
     totalDragDistance.current = 0;
     if (canvasRef.current) canvasRef.current.style.cursor = 'grabbing';
@@ -29,86 +37,91 @@ export const useCamera = (
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return null;
 
-    if (isDragging.current) {
-      const dx = e.clientX - lastMouse.current.x;
-      const dy = e.clientY - lastMouse.current.y;
-      totalDragDistance.current += Math.abs(dx) + Math.abs(dy);
+    const dx = e.clientX - lastMouse.current.x;
+    const dy = e.clientY - lastMouse.current.y;
 
-      camera.current.x += dx / camera.current.zoom;
-      camera.current.y += dy / (camera.current.zoom * ISO_TILT);
+    if (isOrbiting.current) {
+      totalDragDistance.current += Math.abs(dx) + Math.abs(dy);
+      const cam = camera.current;
+      cam.azimuth -= dx * CAMERA.ORBIT_SPEED;
+      cam.elevation = Math.max(0.1, Math.min(Math.PI / 2 - 0.01,
+        cam.elevation + dy * CAMERA.ORBIT_SPEED));
+      lastMouse.current = { x: e.clientX, y: e.clientY };
+      return null; // No world position during orbit
+    }
+
+    if (isDragging.current) {
+      totalDragDistance.current += Math.abs(dx) + Math.abs(dy);
+      const cam = camera.current;
+      const panSpeed = cam.distance * CAMERA.PAN_SPEED;
+
+      // Pan on ground plane relative to camera orientation
+      const cosAz = Math.cos(cam.azimuth);
+      const sinAz = Math.sin(cam.azimuth);
+      cam.targetX -= (cosAz * dx - sinAz * dy) * panSpeed;
+      cam.targetZ -= (-sinAz * dx - cosAz * dy) * panSpeed;
 
       lastMouse.current = { x: e.clientX, y: e.clientY };
     }
 
+    // Raycast mouse to ground plane for hover detection
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    const cam = camera.current;
+    const hit = screenToGround(
+      mouseX, mouseY, rect.width, rect.height,
+      camera.current, CAMERA.FOV, rect.width / rect.height,
+    );
 
-    const worldX = (mouseX - centerX) / cam.zoom - cam.x;
-    const worldY = (mouseY - centerY) / (cam.zoom * ISO_TILT) - cam.y;
+    if (!hit) return null;
 
-    return { worldX, worldY, isDragging: isDragging.current };
+    return {
+      worldX: hit.x,
+      worldY: hit.z, // hex Y = world Z
+      isDragging: isDragging.current || isOrbiting.current,
+    };
   }, [containerRef]);
 
   const handleMouseUp = useCallback(() => {
     isDragging.current = false;
+    isOrbiting.current = false;
     if (canvasRef.current) canvasRef.current.style.cursor = 'default';
   }, [canvasRef]);
 
-  const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {});
-  handleWheelRef.current = (e: WheelEvent) => {
-    e.preventDefault();
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const direction = e.deltaY > 0 ? -1 : 1;
-    const factor = direction > 0 ? RENDER.ZOOM_SCALE_FACTOR : 1 / RENDER.ZOOM_SCALE_FACTOR;
-
-    const newZoom = Math.max(RENDER.ZOOM_MIN, Math.min(RENDER.ZOOM_MAX, camera.current.zoom * factor));
-
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const M = { x: mouseX, y: mouseY };
-    const C = { x: centerX, y: centerY };
-    const Cam1 = { x: camera.current.x, y: camera.current.y };
-    const Z1 = camera.current.zoom;
-    const Z2 = newZoom;
-
-    // World point under cursor (inverse of isometric projection)
-    const W = {
-      x: (M.x - C.x) / Z1 - Cam1.x,
-      y: (M.y - C.y) / (Z1 * ISO_TILT) - Cam1.y,
-    };
-
-    // New camera offset to keep W under cursor at new zoom
-    const Cam2 = {
-      x: (M.x - C.x) / Z2 - W.x,
-      y: (M.y - C.y) / (Z2 * ISO_TILT) - W.y,
-    };
-
-    camera.current.zoom = newZoom;
-    camera.current.x = Cam2.x;
-    camera.current.y = Cam2.y;
-  };
-
-  // Attach wheel listener with { passive: false } to allow preventDefault
+  // Prevent context menu on right-click (used for orbit)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const onContext = (e: Event) => e.preventDefault();
+    canvas.addEventListener('contextmenu', onContext);
+    return () => canvas.removeEventListener('contextmenu', onContext);
+  }, [canvasRef]);
 
+  // Scroll = zoom
+  const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {});
+  handleWheelRef.current = (e: WheelEvent) => {
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? CAMERA.ZOOM_FACTOR : 1 / CAMERA.ZOOM_FACTOR;
+    camera.current.distance = Math.max(CAMERA.ZOOM_MIN, Math.min(CAMERA.ZOOM_MAX,
+      camera.current.distance * factor));
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
     const onWheel = (e: WheelEvent) => handleWheelRef.current(e);
     canvas.addEventListener('wheel', onWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', onWheel);
   }, [canvasRef]);
 
-  const setCamera = useCallback((x: number, y: number, zoom?: number) => {
-    camera.current.x = x;
-    camera.current.y = y;
-    if (zoom !== undefined) camera.current.zoom = zoom;
+  /** Compute the current view-projection matrix for the given aspect ratio. */
+  const computeViewProjection = useCallback((aspect: number): Float32Array => {
+    return getViewProjection(camera.current, CAMERA.FOV, aspect, CAMERA.NEAR, CAMERA.FAR);
+  }, []);
+
+  const setCamera = useCallback((targetX: number, targetZ: number, distance?: number) => {
+    camera.current.targetX = targetX;
+    camera.current.targetZ = targetZ;
+    if (distance !== undefined) camera.current.distance = distance;
   }, []);
 
   return {
@@ -117,6 +130,7 @@ export const useCamera = (
     handleMouseDown,
     handleMouseMove,
     handleMouseUp,
+    computeViewProjection,
     setCamera,
   };
 };
