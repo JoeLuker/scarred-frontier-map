@@ -63,7 +63,7 @@ export const TERRAIN = {
   // River detection (world-space)
   RIVER_SCALE: 0.0005774,        // River noise frequency
   RIVER_WARP_AMOUNT: 3.0,        // Domain warp strength for organic meandering
-  RIVER_SENSITIVITY: 0.08,       // Valley detection threshold (scaled by riverDensity)
+  RIVER_SENSITIVITY: 0.3,        // Valley detection threshold (scaled by riverDensity)
   RIVER_MIN_ELEV: 0.05,          // Min elevation above sea level for rivers
   RIVER_HIGH_ELEV: 0.15,         // Min distance below mountain threshold for rivers
 
@@ -127,7 +127,7 @@ export const NOISE = {
 export const MESH = {
   VERTEX_SPACING: 25,         // Distance between mesh vertices (HEX_SIZE / 2)
   HEX_GRID_OPACITY: 0.15,    // Opacity of hex grid overlay lines
-  FOG_MIX: 0.04,             // White tint for unexplored fog overlay
+  FOG_MIX: 0.35,             // Desaturation + darken for unexplored fog overlay
 } as const;
 
 // --- Render / LOD Constants ---

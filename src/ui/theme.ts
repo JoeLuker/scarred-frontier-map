@@ -1,14 +1,14 @@
 import { TerrainType, PlanarAlignment } from '../core/types';
 
 export const TERRAIN_COLORS: Record<TerrainType, string> = {
-  [TerrainType.FOREST]: '#166534',
-  [TerrainType.HILL]: '#9a3412',
-  [TerrainType.MARSH]: '#57534e',
-  [TerrainType.MOUNTAIN]: '#334155',
-  [TerrainType.PLAIN]: '#ca8a04',
-  [TerrainType.SETTLEMENT]: '#be123c',
-  [TerrainType.WATER]: '#0d9488',
-  [TerrainType.DESERT]: '#c2410c',
+  [TerrainType.FOREST]: '#2d5a3a',
+  [TerrainType.HILL]: '#7a6a55',
+  [TerrainType.MARSH]: '#5a6455',
+  [TerrainType.MOUNTAIN]: '#5a6070',
+  [TerrainType.PLAIN]: '#8a9a5a',
+  [TerrainType.SETTLEMENT]: '#8a4a3a',
+  [TerrainType.WATER]: '#2d6a7a',
+  [TerrainType.DESERT]: '#a08460',
   [TerrainType.EMPTY]: '#020617',
   [TerrainType.MAGMA]: '#b91c1c',
   [TerrainType.CRYSTAL]: '#6366f1',

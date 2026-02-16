@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { WorldGenConfig } from '../../core/types';
 import { DEFAULT_WORLD_CONFIG } from '../../core/config';
-import { RefreshCw, Lock, Unlock, Save, X, Check } from 'lucide-react';
+import { RefreshCw, Lock, Unlock, Save, X, Check, ChevronDown } from 'lucide-react';
 
 interface WorldGenBarProps {
   initialConfig: WorldGenConfig;
@@ -13,42 +13,102 @@ interface WorldGenBarProps {
 
 type SliderDef = readonly [key: keyof WorldGenConfig, label: string];
 
-const SLIDER_GROUPS: readonly { label: string; sliders: readonly SliderDef[] }[] = [
+const ESSENTIAL_SLIDERS: readonly SliderDef[] = [
+  ['continentScale', 'Continent Scale'],
+  ['waterLevel', 'Water Level'],
+  ['mountainLevel', 'Mountains'],
+  ['vegetationLevel', 'Vegetation'],
+  ['temperature', 'Temperature'],
+  ['ruggedness', 'Ruggedness'],
+];
+
+const ADVANCED_GROUPS: readonly { key: string; label: string; sliders: readonly SliderDef[] }[] = [
   {
+    key: 'landform',
     label: 'Landform',
     sliders: [
-      ['continentScale', 'Continent Scale'],
-      ['mountainLevel', 'Mountains'],
       ['ridgeSharpness', 'Ridge Sharpness'],
-      ['plateauFactor', 'Plateau'],
       ['valleyDepth', 'Valley Depth'],
-    ],
-  },
-  {
-    label: 'Climate',
-    sliders: [
-      ['waterLevel', 'Water'],
-      ['vegetationLevel', 'Vegetation'],
-      ['temperature', 'Temperature'],
-      ['riverDensity', 'Rivers'],
-      ['coastComplexity', 'Coast Complexity'],
-    ],
-  },
-  {
-    label: 'Style',
-    sliders: [
-      ['ruggedness', 'Ruggedness'],
-      ['erosion', 'Erosion'],
-      ['chaos', 'Chaos'],
+      ['plateauFactor', 'Plateau'],
       ['verticality', 'Verticality'],
     ],
   },
+  {
+    key: 'detail',
+    label: 'Detail',
+    sliders: [
+      ['riverDensity', 'Rivers'],
+      ['coastComplexity', 'Coast Complexity'],
+      ['erosion', 'Erosion'],
+      ['chaos', 'Chaos'],
+    ],
+  },
 ];
+
+const SliderControl: React.FC<{
+  sliderKey: keyof WorldGenConfig;
+  label: string;
+  value: number;
+  onChange: (key: keyof WorldGenConfig, value: string) => void;
+}> = ({ sliderKey, label, value, onChange }) => (
+  <div className="min-w-[160px]">
+    <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider mb-1">
+      <span className="text-slate-500">{label}</span>
+      <span className="text-indigo-400 tabular-nums">{Math.round(value * 100)}%</span>
+    </div>
+    <input
+      type="range" min="0" max="1" step="0.01"
+      value={value}
+      onChange={(e) => onChange(sliderKey, e.target.value)}
+      className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+    />
+  </div>
+);
+
+const AdvancedSection: React.FC<{
+  label: string;
+  expanded: boolean;
+  onToggle: () => void;
+  sliders: readonly SliderDef[];
+  config: WorldGenConfig;
+  onChange: (key: keyof WorldGenConfig, value: string) => void;
+}> = ({ label, expanded, onToggle, sliders, config, onChange }) => (
+  <div className="border-t border-slate-800/50">
+    <button
+      onClick={onToggle}
+      className="flex items-center gap-2 w-full px-4 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-slate-300 transition-colors"
+    >
+      <ChevronDown
+        size={12}
+        className={`transition-transform duration-200 ${expanded ? 'rotate-0' : '-rotate-90'}`}
+      />
+      Advanced: {label}
+    </button>
+    <div
+      className="overflow-hidden transition-all duration-200 ease-in-out"
+      style={{ maxHeight: expanded ? '120px' : '0px', opacity: expanded ? 1 : 0 }}
+    >
+      <div className="flex flex-wrap gap-3 px-4 pb-2">
+        {sliders.map(([key, lbl]) => (
+          <SliderControl
+            key={key}
+            sliderKey={key}
+            label={lbl}
+            value={config[key] as number}
+            onChange={onChange}
+          />
+        ))}
+      </div>
+    </div>
+  </div>
+);
 
 export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPreview, onCheckpoint, onCancel, onClose }) => {
   const [config, setConfig] = useState<WorldGenConfig>(initialConfig);
   const [preserveExplored, setPreserveExplored] = useState(true);
   const [isDirty, setIsDirty] = useState(false);
+  const [showLandform, setShowLandform] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
   const rafRef = useRef(0);
 
   // Refs for unmount auto-commit
@@ -147,6 +207,11 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
     onCancel();
   };
 
+  const advancedToggle: Record<string, [boolean, () => void]> = {
+    landform: [showLandform, () => setShowLandform(v => !v)],
+    detail: [showDetail, () => setShowDetail(v => !v)],
+  };
+
   return (
     <div className="bg-slate-950/95 backdrop-blur-xl border-t border-x border-slate-800 shadow-2xl rounded-t-xl animate-in slide-in-from-bottom-4 fade-in duration-200">
       {/* Header */}
@@ -206,38 +271,44 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
         </div>
       </div>
 
-      {/* Slider Groups */}
-      <div className="flex gap-1 px-4 py-3 overflow-x-auto">
-        {SLIDER_GROUPS.map(group => (
-          <div key={group.label} className="flex-shrink-0">
-            <div className="text-[9px] font-bold text-slate-600 uppercase tracking-widest mb-1.5 px-1">{group.label}</div>
-            <div className="flex items-center gap-3">
-              {group.sliders.map(([key, label]) => (
-                <div key={key} className="flex-shrink-0 min-w-[120px]">
-                  <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider mb-1">
-                    <span className="text-slate-500">{label}</span>
-                    <span className="text-indigo-400 tabular-nums">{Math.round(config[key] as number * 100)}%</span>
-                  </div>
-                  <input
-                    type="range" min="0" max="1" step="0.01"
-                    value={config[key] as number}
-                    onChange={(e) => handleSliderChange(key, e.target.value)}
-                    className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
+      {/* Essential Sliders */}
+      <div className="flex flex-wrap gap-3 px-4 py-3">
+        {ESSENTIAL_SLIDERS.map(([key, label]) => (
+          <SliderControl
+            key={key}
+            sliderKey={key}
+            label={label}
+            value={config[key] as number}
+            onChange={handleSliderChange}
+          />
         ))}
+      </div>
 
-        {/* Seed */}
-        <div className="flex-shrink-0 self-end min-w-[100px]">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Seed</div>
+      {/* Advanced Sections */}
+      {ADVANCED_GROUPS.map(group => {
+        const [expanded, toggle] = advancedToggle[group.key]!;
+        return (
+          <AdvancedSection
+            key={group.key}
+            label={group.label}
+            expanded={expanded}
+            onToggle={toggle}
+            sliders={group.sliders}
+            config={config}
+            onChange={handleSliderChange}
+          />
+        );
+      })}
+
+      {/* Seed */}
+      <div className="border-t border-slate-800/50 px-4 py-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Seed</span>
           <input
             type="number"
             value={config.seed}
             onChange={(e) => handleSeedChange(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 tabular-nums"
+            className="w-24 bg-slate-800 border border-slate-700 rounded px-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 tabular-nums"
           />
         </div>
       </div>

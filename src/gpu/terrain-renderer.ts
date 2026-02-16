@@ -200,7 +200,7 @@ fn fbm3(p: vec2f) -> f32 {
 // Lighting constants
 // ============================================================
 
-const SUN_DIR: vec3f = vec3f(0.35, 0.75, 0.45);  // normalized below
+const SUN_DIR: vec3f = vec3f(0.4, 0.55, 0.5);  // lower sun = longer shadows
 const SUN_COLOR: vec3f = vec3f(1.0, 0.95, 0.85);  // warm sunlight
 const SKY_COLOR: vec3f = vec3f(0.55, 0.65, 0.85);  // cool ambient
 const ROCK_COLOR: vec3f = vec3f(0.42, 0.38, 0.35);  // exposed cliff rock
@@ -211,24 +211,27 @@ const FOG_COLOR: vec3f = vec3f(0.6, 0.68, 0.82);
 // Biome color from elevation/moisture (no lighting yet)
 // ============================================================
 
+fn water_base_color(elevation: f32, world_xz: vec2f) -> vec3f {
+  let sea = u.sea_level;
+  let depth = max(0.0, sea - elevation) / max(sea, 0.001);
+  let shallow_col = u.terrain_colors[0].rgb * 1.1;
+  let mid_col = u.terrain_colors[0].rgb * 0.6;
+  let deep_col = vec3f(0.03, 0.07, 0.15);
+  let shore_t = smoothstep(0.0, 0.12, depth);
+  let deep_t = smoothstep(0.12, 0.7, depth);
+  var water = mix(shallow_col, mid_col, shore_t);
+  water = mix(water, deep_col, deep_t);
+  let wn = value_noise(world_xz * 0.015) * 0.06;
+  water += vec3f(wn * 0.3, wn * 0.5, wn);
+  return water;
+}
+
 fn biome_color(elevation: f32, moisture: f32, terrain_id: f32, world_xz: vec2f) -> vec3f {
   let sea = u.sea_level;
   let is_water = terrain_id < 0.5 || elevation < sea;
 
-  // --- Water: non-linear depth gradient (ocean + rivers) ---
   if (is_water) {
-    let depth = max(0.0, sea - elevation) / max(sea, 0.001);
-    let shallow_col = u.terrain_colors[0].rgb * 1.1;
-    let mid_col = u.terrain_colors[0].rgb * 0.6;
-    let deep_col = vec3f(0.03, 0.07, 0.15);
-    let shore_t = smoothstep(0.0, 0.12, depth);
-    let deep_t = smoothstep(0.12, 0.7, depth);
-    var water = mix(shallow_col, mid_col, shore_t);
-    water = mix(water, deep_col, deep_t);
-    // Subtle noise variation in water
-    let wn = value_noise(world_xz * 0.015) * 0.06;
-    water += vec3f(wn * 0.3, wn * 0.5, wn);
-    return water;
+    return water_base_color(elevation, world_xz);
   }
 
   // --- Land biome blending (moisture axis) ---
@@ -249,21 +252,28 @@ fn biome_color(elevation: f32, moisture: f32, terrain_id: f32, world_xz: vec2f) 
 
   var base = desert_col * desert_w + plain_col * plain_w + forest_col * forest_w + marsh_col * marsh_w;
 
+  // --- Forest density darkening: high-moisture areas get denser canopy ---
+  let forest_density = smoothstep(u.moisture_forest, u.moisture_marsh, m);
+  let canopy_dark = forest_density * 0.2;
+  let tree_var = (value_noise(world_xz * 0.08) - 0.5) * forest_density * 0.15;
+  base *= (1.0 - canopy_dark);
+  base.g += tree_var;
+
   // Elevation axis: blend toward hill/mountain
   let hill_t = smoothstep(u.hill_threshold - 0.05, u.hill_threshold + 0.05, elevation);
   let mtn_t  = smoothstep(u.mountain_threshold - 0.05, u.mountain_threshold + 0.05, elevation);
   base = mix(base, hill_col, hill_t * (1.0 - mtn_t));
   base = mix(base, mtn_col, mtn_t);
 
-  // --- Multi-frequency noise variation (breaks up flat biome colors) ---
-  let low_noise  = (fbm3(world_xz * 0.003) - 0.5) * 0.12;  // large patches
-  let mid_noise  = (value_noise(world_xz * 0.02) - 0.5) * 0.08;  // geological
-  let high_noise = (value_noise(world_xz * 0.12) - 0.5) * 0.04;  // surface grain
+  // --- Multi-frequency noise variation (amplified for visibility) ---
+  let low_noise  = (fbm3(world_xz * 0.003) - 0.5) * 0.25;  // large patches
+  let mid_noise  = (value_noise(world_xz * 0.02) - 0.5) * 0.15;  // geological
+  let high_noise = (value_noise(world_xz * 0.12) - 0.5) * 0.08;  // surface grain
   let noise_sum = low_noise + mid_noise + high_noise;
   base *= (1.0 + noise_sum);
-  // Slight hue shift on low-frequency noise
-  base.r *= (1.0 + low_noise * 0.25);
-  base.b *= (1.0 - low_noise * 0.15);
+  // Stronger hue shift on low-frequency noise
+  base.r *= (1.0 + low_noise * 0.5);
+  base.b *= (1.0 - low_noise * 0.3);
 
   return base;
 }
@@ -275,6 +285,8 @@ fn biome_color(elevation: f32, moisture: f32, terrain_id: f32, world_xz: vec2f) 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let sun_dir = normalize(SUN_DIR);
+  let sea = u.sea_level;
+  let is_water = in.terrain_id < 0.5 || in.elevation < sea;
 
   // --- Surface normal via screen-space derivatives ---
   let ddx_pos = dpdx(in.world_pos);
@@ -282,56 +294,73 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let normal = normalize(cross(ddx_pos, ddy_pos));
   let slope = 1.0 - abs(normal.y);
 
-  // --- Curvature approximation (second derivatives of elevation) ---
+  // --- Curvature approximation (stronger sensitivity) ---
   let ddx_e = dpdx(in.elevation);
   let ddy_e = dpdy(in.elevation);
-  let curvature = clamp((dpdx(ddx_e) + dpdy(ddy_e)) * 80.0, -1.0, 1.0);
+  let curvature = clamp((dpdx(ddx_e) + dpdy(ddy_e)) * 200.0, -1.0, 1.0);
 
   // --- Base biome color ---
   var color = biome_color(in.elevation, in.moisture, in.terrain_id, in.world_pos.xz);
 
-  // --- Slope-based rock blending (cliff material, not just darkening) ---
-  let rock_blend = smoothstep(0.25, 0.65, slope);
-  color = mix(color, ROCK_COLOR, rock_blend * 0.7);
+  // --- Water specular + Fresnel (needs normal, sun_dir, eye_pos) ---
+  if (is_water) {
+    let view_dir = normalize(u.eye_pos - in.world_pos);
+    // Perturb water normal with noise for ripple effect
+    let wn1 = (value_noise(in.world_pos.xz * 0.03) - 0.5) * 0.3;
+    let wn2 = (value_noise(in.world_pos.xz * 0.07 + vec2f(50.0, 80.0)) - 0.5) * 0.15;
+    let water_normal = normalize(vec3f(wn1, 1.0, wn2));
 
-  // --- Curvature accent: lighten ridges, darken valleys ---
-  let ridge_light = max(0.0, curvature) * 0.15;
-  let valley_dark = max(0.0, -curvature) * 0.2;
-  color *= (1.0 + ridge_light - valley_dark);
+    // Sun glint: tight specular highlight
+    let reflect_dir = reflect(-sun_dir, water_normal);
+    let spec = pow(max(dot(reflect_dir, view_dir), 0.0), 64.0);
+    color += SUN_COLOR * spec * 0.6;
 
-  // --- Altitude desaturation + snow ---
-  let sea = u.sea_level;
-  let land_range = 1.0 - sea;
-  let norm_elev = select(0.0, (in.elevation - sea) / land_range, land_range > 0.0);
+    // Fresnel sky reflection: stronger at grazing angles
+    let NdotV = max(dot(water_normal, view_dir), 0.0);
+    let fresnel = pow(1.0 - NdotV, 3.0) * 0.4;
+    color = mix(color, SKY_COLOR * 0.8, fresnel);
+  }
 
-  // Desaturate and cool at altitude
-  let gray = dot(color, vec3f(0.299, 0.587, 0.114));
-  let altitude_desat = smoothstep(0.4, 0.85, norm_elev) * 0.35;
-  color = mix(color, vec3f(gray) * vec3f(0.92, 0.94, 1.0), altitude_desat);
+  if (!is_water) {
+    // --- Noise-textured rock on cliffs ---
+    let rock_strata = fbm3(in.world_pos.xz * 0.05);
+    let rock_grain = value_noise(in.world_pos.xz * 0.2);
+    let textured_rock = ROCK_COLOR * (0.8 + rock_strata * 0.3 + rock_grain * 0.1);
+    let rock_blend = smoothstep(0.2, 0.55, slope);
+    color = mix(color, textured_rock, rock_blend * 0.85);
 
-  // Snow: accumulates on flat surfaces at high altitude
-  let snow_line = 0.72;
-  let snow_base = smoothstep(snow_line, 0.92, norm_elev);
-  let snow_slip = 1.0 - smoothstep(0.3, 0.6, slope);  // slides off steep faces
-  let snow_noise = value_noise(in.world_pos.xz * 0.04) * 0.15;
-  let snow_t = clamp(snow_base * snow_slip + snow_noise * snow_base, 0.0, 1.0);
-  let snow_color = vec3f(0.90, 0.93, 0.97);
-  color = mix(color, snow_color, snow_t);
+    // --- Curvature accent: stronger ridges/valleys ---
+    let ridge_light = max(0.0, curvature) * 0.35;
+    let valley_dark = max(0.0, -curvature) * 0.4;
+    color *= (1.0 + ridge_light - valley_dark);
 
-  // --- Directional lighting (Half-Lambert) ---
-  let is_water = select(0.0, 1.0, in.terrain_id < 0.5 || in.elevation < sea);
+    // --- Altitude desaturation + textured snow ---
+    let land_range = 1.0 - sea;
+    let norm_elev = select(0.0, (in.elevation - sea) / land_range, land_range > 0.0);
+
+    let gray = dot(color, vec3f(0.299, 0.587, 0.114));
+    let altitude_desat = smoothstep(0.4, 0.85, norm_elev) * 0.35;
+    color = mix(color, vec3f(gray) * vec3f(0.92, 0.94, 1.0), altitude_desat);
+
+    // Snow with fine + coarse noise for sparkle/variation
+    let snow_line = 0.72;
+    let snow_base = smoothstep(snow_line, 0.92, norm_elev);
+    let snow_slip = 1.0 - smoothstep(0.3, 0.6, slope);
+    let snow_fine = value_noise(in.world_pos.xz * 0.15) * 0.12;
+    let snow_coarse = (fbm3(in.world_pos.xz * 0.02) - 0.5) * 0.2;
+    let snow_t = clamp(snow_base * snow_slip + snow_fine * snow_base + snow_coarse * snow_base, 0.0, 1.0);
+    let snow_color = vec3f(0.90, 0.93, 0.97) + vec3f(snow_fine * 0.08);
+    color = mix(color, snow_color, snow_t);
+  }
+
+  // --- Directional lighting (Wrapped Lambert) ---
   let NdotL = dot(normal, sun_dir);
-  let half_lambert = NdotL * 0.5 + 0.5;
-  let diffuse = half_lambert * half_lambert;
-  let light = mix(SKY_COLOR * 0.7, SUN_COLOR, diffuse);
+  let wrapped = saturate((NdotL + 0.15) / 1.15);
+  let light = mix(SKY_COLOR * 0.35, SUN_COLOR, wrapped);
   // Water gets subtler lighting; land gets full effect
-  let light_strength = mix(1.0, 0.6, is_water);
-  color *= mix(vec3f(0.85), light, light_strength);
-
-  // Additional cliff shadow on steep sun-facing check
-  let cliff_shadow = smoothstep(-0.05, 0.15, NdotL);
-  let slope_shadow = mix(0.5, 1.0, cliff_shadow) * mix(1.0, mix(0.6, 1.0, cliff_shadow), smoothstep(0.4, 0.8, slope));
-  color *= slope_shadow;
+  let is_water_f = select(0.0, 1.0, is_water);
+  let light_strength = mix(1.0, 0.5, is_water_f);
+  color *= mix(vec3f(0.65), light, light_strength);
 
   // --- Hex grid overlay (SDF) ---
   let edge_dist = hex_edge_distance(in.world_pos.x, in.world_pos.z, u.hex_size);
@@ -349,8 +378,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     color = mix(color, tint_color, 0.3);
   }
 
+  // Fog-of-war: desaturation + darken instead of white tint
   if (explored < 0.5) {
-    color = mix(color, vec3f(1.0), u.fog_mix);
+    let lum = dot(color, vec3f(0.299, 0.587, 0.114));
+    let fog_grey = vec3f(lum) * 0.4;
+    color = mix(color, fog_grey, u.fog_mix);
   }
 
   // --- Atmospheric distance fog ---
@@ -364,10 +396,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let edge_fade = smoothstep(world_radius * world_radius, (world_radius - 200.0) * (world_radius - 200.0), world_dist2);
   color *= edge_fade;
 
-  // --- Soft HDR clamp (Reinhard tone mapping) ---
+  // --- Soft HDR clamp (Reinhard tone mapping, adjusted rescale) ---
   color = color / (color + vec3f(1.0));
-  // Undo for LDR range (scale back up since our values are mostly < 1)
-  color *= 1.8;
+  color *= 1.6;
 
   return vec4f(clamp(color, vec3f(0.0), vec3f(1.0)), 1.0);
 }
