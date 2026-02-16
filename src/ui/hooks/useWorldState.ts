@@ -154,6 +154,7 @@ export const useWorldState = () => {
       const gen = ++previewGenRef.current;
       compute.generate(config, committed.hexes.length).then(results => {
         if (gen !== previewGenRef.current) return; // stale — newer preview superseded this one
+        if (results.length === 0) return; // skipped (concurrent generate in flight)
 
         const newHexes = committed.hexes.map((hex, i) => {
           if (preserveExplored && hex.isExplored) return { ...hex };
