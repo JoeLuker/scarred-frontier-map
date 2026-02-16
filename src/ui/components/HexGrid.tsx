@@ -12,6 +12,7 @@ import {
   buildTerrainMesh,
   HexStateTexture,
   worldToScreen,
+  getEyePosition,
 } from '../../gpu';
 
 // ===================================================================
@@ -306,6 +307,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
     }
 
     // --- Camera + uniforms ---
+    const cam = camera.current;
     const aspect = logW / logH;
     const viewProj = computeViewProjection(aspect);
     const cfg = worldConfigRef.current;
@@ -321,6 +323,8 @@ export const HexGrid: React.FC<HexGridProps> = ({
     const moistureForest = TERRAIN.MOISTURE_FOREST + tempShift * 0.2;
     const moistureMarsh = TERRAIN.MOISTURE_MARSH - tempShift * 0.2;
 
+    const eyePos = getEyePosition(cam);
+
     renderer.updateUniforms(
       viewProj,
       heightScale,
@@ -335,6 +339,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
       MESH.HEX_GRID_OPACITY,
       MESH.FOG_MIX,
       GPU_TERRAIN_COLORS,
+      eyePos,
     );
 
     renderer.render();
@@ -345,7 +350,6 @@ export const HexGrid: React.FC<HexGridProps> = ({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, logW, logH);
 
-    const cam = camera.current;
     const allHexes = hexesRef.current;
     const hoveredIdx = hoveredHexIndexRef.current;
 
