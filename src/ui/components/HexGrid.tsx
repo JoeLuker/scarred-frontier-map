@@ -1,13 +1,52 @@
-import React, { useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
 import { HexData, PlanarOverlay, WorldGenConfig, TerrainType } from '../../core/types';
-import { WORLD, RENDER, BIOME, CAMERA } from '../../core/config';
+import { WORLD, RENDER, TERRAIN, CAMERA, MESH } from '../../core/config';
 import { TERRAIN_COLORS, PLANAR_COLORS } from '../theme';
 import { hexToPixel, pixelToHex } from '../../core/geometry';
 import { hexToRgb } from './renderUtils';
-import { computeHexState } from '../../core/planar';
 import { useCamera } from '../hooks/useCamera';
-import { initWebGPU, HexRenderer, worldToScreen } from '../../gpu';
-import { INSTANCE_STRIDE } from '../../gpu/types';
+import {
+  initWebGPU,
+  TerrainRenderer,
+  TerrainMesh,
+  buildTerrainMesh,
+  HexStateTexture,
+  worldToScreen,
+} from '../../gpu';
+
+// ===================================================================
+// Pre-computed terrain color array for GPU uniform upload (8 × RGBA)
+// ===================================================================
+
+const TERRAIN_COLOR_ORDER: readonly TerrainType[] = [
+  TerrainType.WATER,
+  TerrainType.DESERT,
+  TerrainType.PLAIN,
+  TerrainType.FOREST,
+  TerrainType.MARSH,
+  TerrainType.HILL,
+  TerrainType.MOUNTAIN,
+  TerrainType.SETTLEMENT,
+];
+
+function buildTerrainColorArray(): Float32Array {
+  const colors = new Float32Array(32); // 8 × 4 (rgba)
+  for (let i = 0; i < TERRAIN_COLOR_ORDER.length; i++) {
+    const hex = TERRAIN_COLORS[TERRAIN_COLOR_ORDER[i]!];
+    const { r, g, b } = hexToRgb(hex);
+    colors[i * 4] = r / 255;
+    colors[i * 4 + 1] = g / 255;
+    colors[i * 4 + 2] = b / 255;
+    colors[i * 4 + 3] = 1.0;
+  }
+  return colors;
+}
+
+const GPU_TERRAIN_COLORS = buildTerrainColorArray();
+
+// ===================================================================
+// Component
+// ===================================================================
 
 interface HexGridProps {
   hexes: HexData[];
@@ -18,25 +57,6 @@ interface HexGridProps {
   onModifyOverlay: (overlay: PlanarOverlay) => void;
   onCommitOverlay: () => void;
   showGizmos: boolean;
-}
-
-/** Resolve hex display color as normalized [0-1] RGB for the GPU instance buffer. */
-function resolveColor(hex: HexData): { r: number; g: number; b: number } {
-  const baseHex = hex.isExplored ? TERRAIN_COLORS[hex.terrain] : '#0f172a';
-  const base = hexToRgb(baseHex);
-
-  if (hex.terrain !== hex.baseTerrain || hex.planarInfluences.length === 0) {
-    return { r: base.r / 255, g: base.g / 255, b: base.b / 255 };
-  }
-
-  let r = base.r, g = base.g, b = base.b, tw = 1.0;
-  for (const inf of hex.planarInfluences) {
-    const p = hexToRgb(PLANAR_COLORS[inf.type]);
-    const eff = hex.isExplored ? inf.intensity : inf.intensity * RENDER.FOG_TINT_MULT;
-    const w = eff * RENDER.PLANAR_TINT_WEIGHT;
-    r += p.r * w; g += p.g * w; b += p.b * w; tw += w;
-  }
-  return { r: r / tw / 255, g: g / tw / 255, b: b / tw / 255 };
 }
 
 export const HexGrid: React.FC<HexGridProps> = ({
@@ -57,11 +77,26 @@ export const HexGrid: React.FC<HexGridProps> = ({
   const overlaysRef = useRef(planarOverlays);
   const worldConfigRef = useRef(worldConfig);
   const showGizmosRef = useRef(showGizmos);
-  const hoveredHexIdRef = useRef<string | null>(null);
   const draggingOverlayIdRef = useRef<string | null>(null);
 
-  const gpuRef = useRef<HexRenderer | null>(null);
-  const instanceBuf = useRef<Float32Array | null>(null);
+  // GPU resources
+  const rendererRef = useRef<TerrainRenderer | null>(null);
+  const meshRef = useRef<TerrainMesh | null>(null);
+  const hexStateRef = useRef<HexStateTexture | null>(null);
+
+  // Track what mesh was built for (to know when to rebuild)
+  const meshConfigRef = useRef<WorldGenConfig | null>(null);
+
+  // Track what hex state was built for
+  const hexStateSourceRef = useRef<HexData[] | null>(null);
+
+  // O(1) hex coordinate → array index lookup
+  const hexLookupRef = useRef<Map<string, number>>(new Map());
+  const hoveredHexIndexRef = useRef(-1);
+
+  // FPS counter
+  const fpsRef = useRef({ frames: 0, lastTime: performance.now(), fps: 0 });
+  const fpsElRef = useRef<HTMLDivElement>(null);
 
   const {
     camera,
@@ -73,8 +108,17 @@ export const HexGrid: React.FC<HexGridProps> = ({
     setCamera,
   } = useCamera(canvasRef, containerRef);
 
-  // --- Sync refs ---
-  useEffect(() => { hexesRef.current = hexes; }, [hexes]);
+  // --- Sync refs + rebuild lookup map when hexes change ---
+  useEffect(() => {
+    hexesRef.current = hexes;
+    const lookup = new Map<string, number>();
+    for (let i = 0; i < hexes.length; i++) {
+      const h = hexes[i]!;
+      lookup.set(`${h.coordinates.q},${h.coordinates.r}`, i);
+    }
+    hexLookupRef.current = lookup;
+    hoveredHexIndexRef.current = -1;
+  }, [hexes]);
   useEffect(() => { overlaysRef.current = planarOverlays; }, [planarOverlays]);
   useEffect(() => { worldConfigRef.current = worldConfig; }, [worldConfig]);
   useEffect(() => { showGizmosRef.current = showGizmos; }, [showGizmos]);
@@ -86,25 +130,74 @@ export const HexGrid: React.FC<HexGridProps> = ({
       const ctx = await initWebGPU();
       if (cancelled || !ctx || !gpuCanvasRef.current) return;
       try {
-        const renderer = HexRenderer.create(ctx.device, gpuCanvasRef.current, 20000);
-        gpuRef.current = renderer;
-        console.log('WebGPU 3D hex renderer initialized');
+        const renderer = TerrainRenderer.create(ctx.device, gpuCanvasRef.current);
+        const mesh = TerrainMesh.create(ctx.device, 250000);
+        const hexState = HexStateTexture.create(ctx.device, WORLD.GRID_RADIUS);
+
+        rendererRef.current = renderer;
+        meshRef.current = mesh;
+        hexStateRef.current = hexState;
+
+        renderer.setMesh(mesh);
+        renderer.setHexState(hexState);
+
+        // Build initial mesh + hex state (effects may have already fired and missed the null refs)
+        const cfg = worldConfigRef.current;
+        const buffers = buildTerrainMesh(cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING);
+        mesh.upload(buffers);
+        meshConfigRef.current = cfg;
+
+        hexState.update(hexesRef.current);
+        hexStateSourceRef.current = hexesRef.current;
+
+        console.log(`WebGPU terrain renderer initialized (${buffers.vertexCount} verts, ${buffers.indexCount / 3} tris)`);
       } catch (err) {
         console.warn('WebGPU renderer init failed:', err);
       }
     })();
     return () => {
       cancelled = true;
-      gpuRef.current?.destroy();
-      gpuRef.current = null;
+      rendererRef.current?.destroy();
+      rendererRef.current = null;
+      meshRef.current?.destroy();
+      meshRef.current = null;
+      hexStateRef.current?.destroy();
+      hexStateRef.current = null;
     };
   }, []);
+
+  // --- Rebuild terrain mesh when world config changes ---
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+
+    // Skip if config hasn't changed (same reference = same config)
+    if (meshConfigRef.current === worldConfig) return;
+    meshConfigRef.current = worldConfig;
+
+    // Build mesh on a microtask to not block the UI thread during initial render
+    const cfg = worldConfig;
+    requestIdleCallback(() => {
+      const buffers = buildTerrainMesh(cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING);
+      mesh.upload(buffers);
+      console.log(`Terrain mesh: ${buffers.vertexCount} verts, ${buffers.indexCount / 3} tris`);
+    });
+  }, [worldConfig]);
+
+  // --- Update hex state texture when hex data changes ---
+  useEffect(() => {
+    const hexState = hexStateRef.current;
+    if (!hexState) return;
+    if (hexStateSourceRef.current === hexes) return;
+    hexStateSourceRef.current = hexes;
+    hexState.update(hexes);
+  }, [hexes]);
 
   // --- Focus hex ---
   useEffect(() => {
     if (focusedHex && containerRef.current) {
       const pixel = hexToPixel(focusedHex.coordinates.q, focusedHex.coordinates.r, WORLD.HEX_SIZE);
-      setCamera(pixel.x, pixel.y); // pixel.y → world Z
+      setCamera(pixel.x, pixel.y);
     }
   }, [focusedHex, setCamera]);
 
@@ -148,10 +241,8 @@ export const HexGrid: React.FC<HexGridProps> = ({
     const result = onCamMove(e);
     if (!result || result.isDragging) return;
     const hexCoords = pixelToHex(result.worldX, result.worldY, WORLD.HEX_SIZE);
-    const exactHex = hexesRef.current.find(h =>
-      h.coordinates.q === hexCoords.q && h.coordinates.r === hexCoords.r,
-    );
-    hoveredHexIdRef.current = exactHex ? exactHex.id : null;
+    const idx = hexLookupRef.current.get(`${hexCoords.q},${hexCoords.r}`);
+    hoveredHexIndexRef.current = idx !== undefined ? idx : -1;
   };
 
   const handleMouseUp = () => {
@@ -167,8 +258,9 @@ export const HexGrid: React.FC<HexGridProps> = ({
   const handleClick = () => {
     if (draggingOverlayIdRef.current) return;
     if (totalDragDistance.current > CAMERA.DRAG_THRESHOLD) return;
-    if (hoveredHexIdRef.current) {
-      const target = hexesRef.current.find(h => h.id === hoveredHexIdRef.current);
+    const idx = hoveredHexIndexRef.current;
+    if (idx >= 0) {
+      const target = hexesRef.current[idx];
       if (target) onHexClick(target);
     }
   };
@@ -178,12 +270,24 @@ export const HexGrid: React.FC<HexGridProps> = ({
   // ===================================================================
 
   const renderGpu = useCallback(() => {
-    const gpu = gpuRef.current;
+    const renderer = rendererRef.current;
     const canvas = canvasRef.current;
     const gpuCanvas = gpuCanvasRef.current;
     const container = containerRef.current;
-    if (!gpu || !canvas || !gpuCanvas || !container) return;
+    if (!renderer || !canvas || !gpuCanvas || !container) return;
 
+    // --- FPS tracking ---
+    const fpsState = fpsRef.current;
+    fpsState.frames++;
+    const now = performance.now();
+    if (now - fpsState.lastTime >= 1000) {
+      fpsState.fps = fpsState.frames;
+      fpsState.frames = 0;
+      fpsState.lastTime = now;
+      if (fpsElRef.current) fpsElRef.current.textContent = `${fpsState.fps} fps`;
+    }
+
+    // --- Canvas sizing ---
     const dpr = window.devicePixelRatio || 1;
     const rect = container.getBoundingClientRect();
     const logW = rect.width;
@@ -194,76 +298,60 @@ export const HexGrid: React.FC<HexGridProps> = ({
     if (gpuCanvas.width !== pixW || gpuCanvas.height !== pixH) {
       gpuCanvas.width = pixW;
       gpuCanvas.height = pixH;
-      gpu.reconfigure();
+      renderer.reconfigure();
     }
     if (canvas.width !== pixW || canvas.height !== pixH) {
       canvas.width = pixW;
       canvas.height = pixH;
     }
 
+    // --- Camera + uniforms ---
     const aspect = logW / logH;
     const viewProj = computeViewProjection(aspect);
-    gpu.updateCamera(viewProj);
-
-    // --- Build instance buffer ---
-    const allHexes = hexesRef.current;
-    const activeOverlays = overlaysRef.current;
-    const hoveredId = hoveredHexIdRef.current;
-    const needed = allHexes.length * INSTANCE_STRIDE;
-    if (!instanceBuf.current || instanceBuf.current.length < needed) {
-      instanceBuf.current = new Float32Array(needed);
-    }
-    const buf = instanceBuf.current;
-
     const cfg = worldConfigRef.current;
-    const seaLevel = BIOME.SEA_LEVEL_MIN + cfg.waterLevel * BIOME.SEA_LEVEL_RANGE;
-    const landRange = 1 - seaLevel;
+    const heightScale = WORLD.HEX_SIZE * RENDER.HEIGHT_SCALE * (0.2 + cfg.verticality * 1.8);
 
-    // Distance-based culling from camera target
-    const cam = camera.current;
-    const cullDist = cam.distance * 2.5;
-    const cullDist2 = cullDist * cullDist;
+    const seaLevel = TERRAIN.SEA_LEVEL_MIN + cfg.waterLevel * TERRAIN.SEA_LEVEL_RANGE;
+    const mountainThreshold = TERRAIN.MOUNTAIN_THRESHOLD_BASE - cfg.mountainLevel * TERRAIN.MOUNTAIN_THRESHOLD_RANGE;
+    const hillThreshold = mountainThreshold - TERRAIN.HILL_OFFSET;
 
-    let count = 0;
-    for (const hex of allHexes) {
-      const px = hexToPixel(hex.coordinates.q, hex.coordinates.r, WORLD.HEX_SIZE);
+    // Temperature-shifted moisture thresholds
+    const tempShift = cfg.temperature - 0.5;
+    const moistureDesert = TERRAIN.MOISTURE_DESERT + tempShift * 0.3;
+    const moistureForest = TERRAIN.MOISTURE_FOREST + tempShift * 0.2;
+    const moistureMarsh = TERRAIN.MOISTURE_MARSH - tempShift * 0.2;
 
-      // Cull hexes too far from camera target
-      const dx = px.x - cam.targetX;
-      const dz = px.y - cam.targetZ; // hex y → world z
-      if (dx * dx + dz * dz > cullDist2) continue;
+    renderer.updateUniforms(
+      viewProj,
+      heightScale,
+      WORLD.HEX_SIZE,
+      seaLevel,
+      mountainThreshold,
+      hillThreshold,
+      WORLD.GRID_RADIUS,
+      moistureDesert,
+      moistureForest,
+      moistureMarsh,
+      MESH.HEX_GRID_OPACITY,
+      MESH.FOG_MIX,
+      GPU_TERRAIN_COLORS,
+    );
 
-      const live = computeHexState(hex, activeOverlays);
-      const col = resolveColor(live);
+    renderer.render();
 
-      const height = live.terrain === TerrainType.WATER
-        ? 0
-        : landRange > 0 ? Math.max(0, (hex.elevation - seaLevel) / landRange) : 0;
-
-      const off = count * INSTANCE_STRIDE;
-      buf[off] = px.x;
-      buf[off + 1] = px.y;
-      buf[off + 2] = col.r;
-      buf[off + 3] = col.g;
-      buf[off + 4] = col.b;
-      buf[off + 5] = hoveredId === hex.id ? 1.0 : 0.97;
-      buf[off + 6] = height;
-      buf[off + 7] = hex.isExplored ? 1.0 : 0.0;
-      count++;
-    }
-
-    gpu.updateInstances(buf.subarray(0, count * INSTANCE_STRIDE));
-    gpu.render();
-
-    // --- Canvas 2D overlay (hover, gizmos) ---
+    // --- Canvas 2D overlay ---
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, logW, logH);
 
-    // Draw hover highlight at projected position
-    if (hoveredId) {
-      const hovered = allHexes.find(h => h.id === hoveredId);
+    const cam = camera.current;
+    const allHexes = hexesRef.current;
+    const hoveredIdx = hoveredHexIndexRef.current;
+
+    // Hover highlight
+    if (hoveredIdx >= 0) {
+      const hovered = allHexes[hoveredIdx];
       if (hovered) {
         const hp = hexToPixel(hovered.coordinates.q, hovered.coordinates.r, WORLD.HEX_SIZE);
         const screen = worldToScreen(hp.x, 0, hp.y, viewProj, logW, logH);
@@ -289,6 +377,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
     }
 
     // Planar overlay gizmos
+    const activeOverlays = overlaysRef.current;
     if (showGizmosRef.current) {
       activeOverlays.forEach(overlay => {
         const op = hexToPixel(overlay.coordinates.q, overlay.coordinates.r, WORLD.HEX_SIZE);
@@ -320,7 +409,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
   useEffect(() => {
     const loop = () => {
-      if (gpuRef.current) {
+      if (rendererRef.current) {
         renderGpu();
       }
       animationRef.current = requestAnimationFrame(loop);
@@ -340,6 +429,10 @@ export const HexGrid: React.FC<HexGridProps> = ({
         onMouseLeave={handleMouseUp}
         onClick={handleClick}
         className="absolute inset-0 block w-full h-full"
+      />
+      <div
+        ref={fpsElRef}
+        className="absolute top-2 left-2 z-50 text-white/40 text-[11px] font-mono pointer-events-none"
       />
     </div>
   );

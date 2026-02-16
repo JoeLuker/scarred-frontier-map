@@ -1,7 +1,10 @@
 export { initWebGPU, getGpuContext } from './context';
-export { HexRenderer } from './hex-renderer';
+export { TerrainRenderer } from './terrain-renderer';
+export { TerrainMesh, buildTerrainMesh } from './terrain-mesh';
+export { HexStateTexture } from './hex-state-texture';
 export { TerrainCompute, terrainFromId, elementFromId, flavorFromId } from './terrain-compute';
 export { getViewProjection, screenToGround, worldToScreen, getEyePosition } from './camera';
 export type { OrbitalCamera } from './camera';
 export type { GpuContext } from './types';
 export type { GpuTerrainResult } from './terrain-compute';
+export type { MeshBuffers } from './terrain-mesh';

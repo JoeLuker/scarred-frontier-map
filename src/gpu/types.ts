@@ -62,7 +62,7 @@ export interface GpuContext {
   readonly device: GPUDevice;
 }
 
-// --- Instance data layout for hex rendering ---
-// Each hex instance: pos(2) + color(3) + scale(1) + height(1) + explored(1) = 8 floats = 32 bytes
-export const INSTANCE_STRIDE = 8;
-export const INSTANCE_BYTE_STRIDE = INSTANCE_STRIDE * 4;
+// --- Mesh vertex data layout for terrain rendering ---
+// Each vertex: posX(1) + posZ(1) + elevation(1) + moisture(1) + terrainId(1) = 5 floats = 20 bytes
+export const MESH_VERTEX_STRIDE = 5;
+export const MESH_VERTEX_BYTE_STRIDE = MESH_VERTEX_STRIDE * 4;
