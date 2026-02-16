@@ -65,7 +65,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
   let land_range = 1.0 - sea;
 
   var y: f32 = 0.0;
-  if (in.elevation >= sea && land_range > 0.0) {
+  let is_river = in.terrain_id < 0.5 && in.elevation >= sea;
+  if (!is_river && in.elevation >= sea && land_range > 0.0) {
     let norm_elev = (in.elevation - sea) / land_range;
     y = karst_height(norm_elev) * u.height_scale;
   }
@@ -210,12 +211,13 @@ const FOG_COLOR: vec3f = vec3f(0.6, 0.68, 0.82);
 // Biome color from elevation/moisture (no lighting yet)
 // ============================================================
 
-fn biome_color(elevation: f32, moisture: f32, world_xz: vec2f) -> vec3f {
+fn biome_color(elevation: f32, moisture: f32, terrain_id: f32, world_xz: vec2f) -> vec3f {
   let sea = u.sea_level;
+  let is_water = terrain_id < 0.5 || elevation < sea;
 
-  // --- Water: non-linear depth gradient ---
-  if (elevation < sea) {
-    let depth = (sea - elevation) / max(sea, 0.001);
+  // --- Water: non-linear depth gradient (ocean + rivers) ---
+  if (is_water) {
+    let depth = max(0.0, sea - elevation) / max(sea, 0.001);
     let shallow_col = u.terrain_colors[0].rgb * 1.1;
     let mid_col = u.terrain_colors[0].rgb * 0.6;
     let deep_col = vec3f(0.03, 0.07, 0.15);
@@ -286,7 +288,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let curvature = clamp((dpdx(ddx_e) + dpdy(ddy_e)) * 80.0, -1.0, 1.0);
 
   // --- Base biome color ---
-  var color = biome_color(in.elevation, in.moisture, in.world_pos.xz);
+  var color = biome_color(in.elevation, in.moisture, in.terrain_id, in.world_pos.xz);
 
   // --- Slope-based rock blending (cliff material, not just darkening) ---
   let rock_blend = smoothstep(0.25, 0.65, slope);
@@ -317,7 +319,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   color = mix(color, snow_color, snow_t);
 
   // --- Directional lighting (Half-Lambert) ---
-  let is_water = select(0.0, 1.0, in.elevation < sea);
+  let is_water = select(0.0, 1.0, in.terrain_id < 0.5 || in.elevation < sea);
   let NdotL = dot(normal, sun_dir);
   let half_lambert = NdotL * 0.5 + 0.5;
   let diffuse = half_lambert * half_lambert;
