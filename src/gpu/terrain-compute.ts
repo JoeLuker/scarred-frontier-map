@@ -415,6 +415,7 @@ export class TerrainCompute {
   private bindGroupLayout: GPUBindGroupLayout;
   private bindGroup: GPUBindGroup;
   private hexCount: number;
+  private generating = false;
 
   private constructor(
     device: GPUDevice,
@@ -546,6 +547,21 @@ export class TerrainCompute {
     worldConfig: WorldGenConfig,
     hexCount: number,
     forceNoRiver: boolean = false,
+  ): Promise<GpuTerrainResult[]> {
+    // Prevent overlapping mapAsync calls
+    if (this.generating) return [];
+    this.generating = true;
+    try {
+      return await this._generate(worldConfig, hexCount, forceNoRiver);
+    } finally {
+      this.generating = false;
+    }
+  }
+
+  private async _generate(
+    worldConfig: WorldGenConfig,
+    hexCount: number,
+    forceNoRiver: boolean,
   ): Promise<GpuTerrainResult[]> {
     // Upload config (80 bytes: 17 fields + 3 padding)
     const configData = new ArrayBuffer(CONFIG_BUFFER_SIZE);
