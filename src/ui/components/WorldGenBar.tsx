@@ -11,38 +11,72 @@ interface WorldGenBarProps {
   onClose: () => void;
 }
 
-const SLIDERS = [
-  ['waterLevel', 'Water'],
-  ['mountainLevel', 'Mountains'],
-  ['vegetationLevel', 'Vegetation'],
-  ['riverDensity', 'Rivers'],
-  ['ruggedness', 'Ruggedness'],
-] as const;
+type SliderDef = readonly [key: keyof WorldGenConfig, label: string];
+
+const SLIDER_GROUPS: readonly { label: string; sliders: readonly SliderDef[] }[] = [
+  {
+    label: 'Landform',
+    sliders: [
+      ['continentScale', 'Continent Scale'],
+      ['mountainLevel', 'Mountains'],
+      ['ridgeSharpness', 'Ridge Sharpness'],
+      ['plateauFactor', 'Plateau'],
+      ['valleyDepth', 'Valley Depth'],
+    ],
+  },
+  {
+    label: 'Climate',
+    sliders: [
+      ['waterLevel', 'Water'],
+      ['vegetationLevel', 'Vegetation'],
+      ['temperature', 'Temperature'],
+      ['riverDensity', 'Rivers'],
+      ['coastComplexity', 'Coast Complexity'],
+    ],
+  },
+  {
+    label: 'Style',
+    sliders: [
+      ['ruggedness', 'Ruggedness'],
+      ['erosion', 'Erosion'],
+      ['chaos', 'Chaos'],
+      ['verticality', 'Verticality'],
+    ],
+  },
+];
 
 export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPreview, onCheckpoint, onCancel, onClose }) => {
   const [config, setConfig] = useState<WorldGenConfig>(initialConfig);
   const [preserveExplored, setPreserveExplored] = useState(true);
   const [isDirty, setIsDirty] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const rafRef = useRef(0);
 
   // Refs for unmount auto-commit
   const isDirtyRef = useRef(false);
   const configRef = useRef(config);
   const preserveExploredRef = useRef(preserveExplored);
+  const pendingConfigRef = useRef<WorldGenConfig | null>(null);
   configRef.current = config;
   preserveExploredRef.current = preserveExplored;
 
   useEffect(() => {
-    return () => clearTimeout(timeoutRef.current);
+    return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
   const schedulePreview = (newConfig: WorldGenConfig) => {
     setIsDirty(true);
     isDirtyRef.current = true;
-    clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      onPreview(newConfig, preserveExploredRef.current);
-    }, 16);
+    pendingConfigRef.current = newConfig;
+    if (!rafRef.current) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = 0;
+        const pending = pendingConfigRef.current;
+        if (pending) {
+          pendingConfigRef.current = null;
+          onPreview(pending, preserveExploredRef.current);
+        }
+      });
+    }
   };
 
   const handleSliderChange = (key: keyof WorldGenConfig, value: string) => {
@@ -65,6 +99,15 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
       riverDensity: Math.random(),
       ruggedness: Math.random(),
       seed: Math.floor(Math.random() * 99999),
+      continentScale: Math.random(),
+      temperature: Math.random(),
+      ridgeSharpness: Math.random(),
+      plateauFactor: Math.random() * 0.6,
+      coastComplexity: Math.random() * 0.5,
+      erosion: Math.random() * 0.6,
+      valleyDepth: Math.random(),
+      chaos: Math.random() * 0.4,
+      verticality: 0.3 + Math.random() * 0.5,
     };
     setConfig(newConfig);
     schedulePreview(newConfig);
@@ -76,7 +119,9 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
   };
 
   const handleCheckpoint = () => {
-    clearTimeout(timeoutRef.current);
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
+    pendingConfigRef.current = null;
     onPreview(config, preserveExplored);
     onCheckpoint(config, preserveExplored);
     setIsDirty(false);
@@ -84,7 +129,9 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
   };
 
   const handleDone = () => {
-    clearTimeout(timeoutRef.current);
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
+    pendingConfigRef.current = null;
     if (isDirty) {
       onPreview(config, preserveExplored);
       onCheckpoint(config, preserveExplored);
@@ -93,7 +140,9 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
   };
 
   const handleCancel = () => {
-    clearTimeout(timeoutRef.current);
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
+    pendingConfigRef.current = null;
     isDirtyRef.current = false; // Prevent any stale state
     onCancel();
   };
@@ -157,27 +206,32 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
         </div>
       </div>
 
-      {/* Sliders */}
-      <div className="flex items-center gap-4 px-4 py-3 overflow-x-auto">
-        {SLIDERS.map(([key, label]) => (
-          <div key={key} className="flex-shrink-0 flex items-center gap-2 min-w-[140px]">
-            <div className="flex-1">
-              <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider mb-1">
-                <span className="text-slate-500">{label}</span>
-                <span className="text-indigo-400 tabular-nums">{Math.round(config[key] * 100)}%</span>
-              </div>
-              <input
-                type="range" min="0" max="1" step="0.05"
-                value={config[key]}
-                onChange={(e) => handleSliderChange(key, e.target.value)}
-                className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-              />
+      {/* Slider Groups */}
+      <div className="flex gap-1 px-4 py-3 overflow-x-auto">
+        {SLIDER_GROUPS.map(group => (
+          <div key={group.label} className="flex-shrink-0">
+            <div className="text-[9px] font-bold text-slate-600 uppercase tracking-widest mb-1.5 px-1">{group.label}</div>
+            <div className="flex items-center gap-3">
+              {group.sliders.map(([key, label]) => (
+                <div key={key} className="flex-shrink-0 min-w-[120px]">
+                  <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider mb-1">
+                    <span className="text-slate-500">{label}</span>
+                    <span className="text-indigo-400 tabular-nums">{Math.round(config[key] as number * 100)}%</span>
+                  </div>
+                  <input
+                    type="range" min="0" max="1" step="0.01"
+                    value={config[key] as number}
+                    onChange={(e) => handleSliderChange(key, e.target.value)}
+                    className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+              ))}
             </div>
           </div>
         ))}
 
         {/* Seed */}
-        <div className="flex-shrink-0 min-w-[100px]">
+        <div className="flex-shrink-0 self-end min-w-[100px]">
           <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Seed</div>
           <input
             type="number"

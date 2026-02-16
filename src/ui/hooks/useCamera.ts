@@ -16,18 +16,12 @@ export const useCamera = (
   });
 
   const isDragging = useRef(false);
-  const isOrbiting = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
   const totalDragDistance = useRef(0);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button === 2) {
-      // Right-click: orbit
-      isOrbiting.current = true;
-    } else {
-      // Left-click: pan
-      isDragging.current = true;
-    }
+    // All mouse buttons = pan (orbit is handled by trackpad scroll)
+    isDragging.current = true;
     lastMouse.current = { x: e.clientX, y: e.clientY };
     totalDragDistance.current = 0;
     if (canvasRef.current) canvasRef.current.style.cursor = 'grabbing';
@@ -40,16 +34,6 @@ export const useCamera = (
     const dx = e.clientX - lastMouse.current.x;
     const dy = e.clientY - lastMouse.current.y;
 
-    if (isOrbiting.current) {
-      totalDragDistance.current += Math.abs(dx) + Math.abs(dy);
-      const cam = camera.current;
-      cam.azimuth -= dx * CAMERA.ORBIT_SPEED;
-      cam.elevation = Math.max(0.1, Math.min(Math.PI / 2 - 0.01,
-        cam.elevation + dy * CAMERA.ORBIT_SPEED));
-      lastMouse.current = { x: e.clientX, y: e.clientY };
-      return null; // No world position during orbit
-    }
-
     if (isDragging.current) {
       totalDragDistance.current += Math.abs(dx) + Math.abs(dy);
       const cam = camera.current;
@@ -58,8 +42,8 @@ export const useCamera = (
       // Pan on ground plane relative to camera orientation
       const cosAz = Math.cos(cam.azimuth);
       const sinAz = Math.sin(cam.azimuth);
-      cam.targetX -= (cosAz * dx - sinAz * dy) * panSpeed;
-      cam.targetZ -= (-sinAz * dx - cosAz * dy) * panSpeed;
+      cam.targetX -= (cosAz * dx + sinAz * dy) * panSpeed;
+      cam.targetZ -= (-sinAz * dx + cosAz * dy) * panSpeed;
 
       lastMouse.current = { x: e.clientX, y: e.clientY };
     }
@@ -77,32 +61,34 @@ export const useCamera = (
     return {
       worldX: hit.x,
       worldY: hit.z, // hex Y = world Z
-      isDragging: isDragging.current || isOrbiting.current,
+      isDragging: isDragging.current,
     };
   }, [containerRef]);
 
   const handleMouseUp = useCallback(() => {
     isDragging.current = false;
-    isOrbiting.current = false;
     if (canvasRef.current) canvasRef.current.style.cursor = 'default';
   }, [canvasRef]);
 
-  // Prevent context menu on right-click (used for orbit)
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const onContext = (e: Event) => e.preventDefault();
-    canvas.addEventListener('contextmenu', onContext);
-    return () => canvas.removeEventListener('contextmenu', onContext);
-  }, [canvasRef]);
-
-  // Scroll = zoom
+  // Wheel: pinch (ctrlKey) = zoom, two-finger scroll = orbit
   const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {});
   handleWheelRef.current = (e: WheelEvent) => {
     e.preventDefault();
-    const factor = e.deltaY > 0 ? CAMERA.ZOOM_FACTOR : 1 / CAMERA.ZOOM_FACTOR;
-    camera.current.distance = Math.max(CAMERA.ZOOM_MIN, Math.min(CAMERA.ZOOM_MAX,
-      camera.current.distance * factor));
+    const cam = camera.current;
+
+    if (e.ctrlKey) {
+      // Pinch-to-zoom (trackpad pinch sends ctrlKey + deltaY)
+      // deltaY is inverted and much smaller for pinch vs discrete scroll
+      const zoomSpeed = 1 + Math.min(Math.abs(e.deltaY) * 0.01, 0.15);
+      const factor = e.deltaY > 0 ? zoomSpeed : 1 / zoomSpeed;
+      cam.distance = Math.max(CAMERA.ZOOM_MIN, Math.min(CAMERA.ZOOM_MAX,
+        cam.distance * factor));
+    } else {
+      // Two-finger scroll = orbit (deltaX → azimuth, deltaY → elevation)
+      cam.azimuth -= e.deltaX * CAMERA.ORBIT_SPEED * 0.3;
+      cam.elevation = Math.max(0.1, Math.min(Math.PI / 2 - 0.01,
+        cam.elevation + e.deltaY * CAMERA.ORBIT_SPEED * 0.3));
+    }
   };
 
   useEffect(() => {

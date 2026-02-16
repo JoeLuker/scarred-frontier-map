@@ -27,7 +27,7 @@ async function initWebGPUInternal(): Promise<GpuContext | null> {
   return { adapter, device };
 }
 
-// Singleton: both HexRenderer and TerrainCompute share the same device.
+// Singleton: both TerrainRenderer and TerrainCompute share the same device.
 let cachedPromise: Promise<GpuContext | null> | null = null;
 
 export function getGpuContext(): Promise<GpuContext | null> {
