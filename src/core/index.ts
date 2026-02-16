@@ -18,7 +18,11 @@ export {
 } from './types';
 
 // Config
-export { WORLD, DEFAULT_WORLD_CONFIG, BIOME, NOISE, RENDER } from './config';
+export { WORLD, DEFAULT_WORLD_CONFIG, TERRAIN, BIOME, NOISE, RENDER, MESH } from './config';
+
+// Continuous terrain field
+export { sampleTerrain } from './terrain';
+export type { TerrainSample } from './terrain';
 
 // World generation
 export { generateWorld, revealSector, revealAll, regenerateUnexplored, regenerateTerrain } from './world';

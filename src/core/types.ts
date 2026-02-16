@@ -89,6 +89,15 @@ export interface WorldGenConfig {
   readonly riverDensity: number;
   readonly ruggedness: number;
   readonly seed: number;
+  readonly continentScale: number;
+  readonly temperature: number;
+  readonly ridgeSharpness: number;
+  readonly plateauFactor: number;
+  readonly coastComplexity: number;
+  readonly erosion: number;
+  readonly valleyDepth: number;
+  readonly chaos: number;
+  readonly verticality: number;
 }
 
 export interface MutationRule {

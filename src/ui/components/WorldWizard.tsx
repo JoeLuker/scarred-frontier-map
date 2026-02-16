@@ -30,6 +30,15 @@ export const WorldWizard: React.FC<WorldWizardProps> = ({ isOpen, onClose, onGen
       riverDensity: Math.random(),
       ruggedness: Math.random(),
       seed: Math.floor(Math.random() * 99999),
+      continentScale: Math.random(),
+      temperature: Math.random(),
+      ridgeSharpness: Math.random(),
+      plateauFactor: Math.random() * 0.6,
+      coastComplexity: Math.random() * 0.5,
+      erosion: Math.random() * 0.6,
+      valleyDepth: Math.random(),
+      chaos: Math.random() * 0.4,
+      verticality: 0.3 + Math.random() * 0.5,
     });
   };
 

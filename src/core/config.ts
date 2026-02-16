@@ -22,9 +22,65 @@ export const DEFAULT_WORLD_CONFIG: WorldGenConfig = {
   riverDensity: 0.5,
   ruggedness: 0.5,
   seed: 12345,
+  continentScale: 0.5,
+  temperature: 0.5,
+  ridgeSharpness: 0.5,
+  plateauFactor: 0.0,
+  coastComplexity: 0.0,
+  erosion: 0.0,
+  valleyDepth: 0.5,
+  chaos: 0.0,
+  verticality: 0.5,
 };
 
-// --- Biome Generation Thresholds ---
+// --- Continuous Terrain Field (world-space coordinates) ---
+// Scales calibrated for pixel coordinates: old hex-space values ÷ (√3 × HEX_SIZE ≈ 86.6)
+
+export const TERRAIN = {
+  // Layered elevation model — noise scales (world-space)
+  CONTINENTAL_SCALE: 0.0001386,  // Very low freq: large landmasses vs ocean basins
+  RIDGE_SCALE: 0.0002887,        // Mid freq: coherent mountain ranges
+  DETAIL_SCALE: 0.0008083,       // High freq: local hills and dips
+
+  // Layered elevation model — layer weights
+  CONTINENTAL_WEIGHT: 0.55,
+  RIDGE_WEIGHT: 0.35,            // Scaled by mountainLevel slider
+  DETAIL_WEIGHT: 0.10,           // Scaled by ruggedness slider
+
+  // Slider-driven thresholds
+  SEA_LEVEL_MIN: 0.15,           // Sea level at waterLevel=0
+  SEA_LEVEL_RANGE: 0.35,         // Sea level at waterLevel=1 → 0.50
+  MOUNTAIN_THRESHOLD_BASE: 0.85, // Mountain threshold at mountainLevel=0
+  MOUNTAIN_THRESHOLD_RANGE: 0.25, // Mountain threshold at mountainLevel=1 → 0.60
+  HILL_OFFSET: 0.15,             // Hills form this far below mountain threshold
+
+  // Moisture model (world-space)
+  MOISTURE_SCALE: 0.0003464,     // Spatial moisture noise frequency
+  MOISTURE_NOISE_WEIGHT: 0.4,    // Weight of independent noise
+  COASTAL_WEIGHT: 0.4,           // Weight of elevation-derived coastal proximity
+  VEG_BIAS_WEIGHT: 0.2,          // Weight of vegetation slider bias
+
+  // River detection (world-space)
+  RIVER_SCALE: 0.0005774,        // River noise frequency
+  RIVER_WARP_AMOUNT: 3.0,        // Domain warp strength for organic meandering
+  RIVER_SENSITIVITY: 0.08,       // Valley detection threshold (scaled by riverDensity)
+  RIVER_MIN_ELEV: 0.05,          // Min elevation above sea level for rivers
+  RIVER_HIGH_ELEV: 0.15,         // Min distance below mountain threshold for rivers
+
+  // Moisture biome boundaries
+  MOISTURE_DESERT: 0.3,
+  MOISTURE_MARSH: 0.7,
+  MOISTURE_FOREST: 0.5,
+
+  // Coast complexity noise scale (world-space)
+  COAST_NOISE_SCALE: 0.001,
+
+  // Domain warp (chaos parameter)
+  DOMAIN_WARP_SCALE: 0.0003,
+  DOMAIN_WARP_MAX: 300.0,
+} as const;
+
+// --- Per-Hex Biome Constants (use hash(q, r, seed)) ---
 
 export const BIOME = {
   // Settlement scoring
@@ -49,41 +105,6 @@ export const BIOME = {
   GLOBAL_FEATURE: 0.96,
   GLOBAL_RESOURCE: 0.93,
 
-  // Layered elevation model — noise scales
-  CONTINENTAL_SCALE: 0.012,   // Very low freq: large landmasses vs ocean basins
-  RIDGE_SCALE: 0.025,         // Mid freq: coherent mountain ranges
-  DETAIL_SCALE: 0.07,         // High freq: local hills and dips
-
-  // Layered elevation model — layer weights
-  CONTINENTAL_WEIGHT: 0.55,
-  RIDGE_WEIGHT: 0.35,         // Scaled by mountainLevel slider
-  DETAIL_WEIGHT: 0.10,        // Scaled by ruggedness slider
-
-  // Slider-driven thresholds
-  SEA_LEVEL_MIN: 0.15,        // Sea level at waterLevel=0
-  SEA_LEVEL_RANGE: 0.35,      // Sea level at waterLevel=1 → 0.50
-  MOUNTAIN_THRESHOLD_BASE: 0.85, // Mountain threshold at mountainLevel=0
-  MOUNTAIN_THRESHOLD_RANGE: 0.25, // Mountain threshold at mountainLevel=1 → 0.60
-  HILL_OFFSET: 0.15,          // Hills form this far below mountain threshold
-
-  // Moisture model
-  MOISTURE_SCALE: 0.03,       // Spatial moisture noise frequency
-  MOISTURE_NOISE_WEIGHT: 0.4, // Weight of independent noise
-  COASTAL_WEIGHT: 0.4,        // Weight of elevation-derived coastal proximity
-  VEG_BIAS_WEIGHT: 0.2,       // Weight of vegetation slider bias
-
-  // River detection
-  RIVER_SCALE: 0.05,          // River noise frequency
-  RIVER_WARP_AMOUNT: 3.0,     // Domain warp strength for organic meandering
-  RIVER_SENSITIVITY: 0.08,    // Valley detection threshold (scaled by riverDensity)
-  RIVER_MIN_ELEV: 0.05,       // Min elevation above sea level for rivers
-  RIVER_HIGH_ELEV: 0.15,      // Min distance below mountain threshold for rivers
-
-  // Moisture biome boundaries
-  MOISTURE_DESERT: 0.3,
-  MOISTURE_MARSH: 0.7,
-  MOISTURE_FOREST: 0.5,
-
   // Hash seed offsets
   HASH_SETTLEMENT_CHAOS: 111,
   HASH_ELEMENT: 777,
@@ -99,6 +120,14 @@ export const NOISE = {
   INTENSITY_THRESHOLD: 0.1,
   HASH_DIVISOR: 4294967296,
   EDGE_SEED: 12345,
+} as const;
+
+// --- Continuous Terrain Mesh ---
+
+export const MESH = {
+  VERTEX_SPACING: 25,         // Distance between mesh vertices (HEX_SIZE / 2)
+  HEX_GRID_OPACITY: 0.15,    // Opacity of hex grid overlay lines
+  FOG_MIX: 0.04,             // White tint for unexplored fog overlay
 } as const;
 
 // --- Render / LOD Constants ---
