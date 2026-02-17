@@ -156,5 +156,11 @@ export const sampleTerrain = (
     }
   }
 
+  // Rivers carry flat elevation: geometry layer doesn't need terrain type to flatten them.
+  // River detection already passed, so just clamp elevation to water surface.
+  if (isRiver) {
+    elevation = seaLevel;
+  }
+
   return { terrain, elevation, moisture, flavor };
 };

@@ -22,7 +22,7 @@ export const TERRAIN_ORDER: readonly TerrainType[] = [
 ] as const;
 
 // Derived reverse mapping: TerrainType string → shader ID.
-// Used by terrain-mesh.ts for per-hex terrain quantization.
+// Used by hex-state-texture.ts to encode terrain type per hex.
 export const TERRAIN_TYPE_TO_ID: Readonly<Record<string, number>> =
   Object.fromEntries(TERRAIN_ORDER.map((t, i) => [t, i]));
 
@@ -75,6 +75,7 @@ export interface GpuContext {
 }
 
 // --- Mesh vertex data layout for terrain rendering ---
-// Each vertex: posX(1) + posZ(1) + elevation(1) + moisture(1) + terrainId(1) + normalXYZ(3) = 8 floats = 32 bytes
-export const MESH_VERTEX_STRIDE = 8;
+// Each vertex: posX(1) + posZ(1) + elevation(1) + moisture(1) + normalXYZ(3) = 7 floats = 28 bytes
+// Terrain type is resolved per-fragment from the hex state texture (Layer 3), not per-vertex.
+export const MESH_VERTEX_STRIDE = 7;
 export const MESH_VERTEX_BYTE_STRIDE = MESH_VERTEX_STRIDE * 4;

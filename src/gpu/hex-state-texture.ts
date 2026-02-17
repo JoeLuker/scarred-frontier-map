@@ -1,6 +1,7 @@
 import { HexData, PlanarAlignment } from '../core/types';
 import { getSectorID } from '../core/geometry';
 import { WORLD } from '../core/config';
+import { TERRAIN_TYPE_TO_ID } from './types';
 
 // Plane type → integer ID (0-7)
 const PLANE_TYPE_ID: Record<string, number> = {
@@ -22,7 +23,8 @@ const PLANE_TYPE_ID: Record<string, number> = {
  *   R = explored (255 = explored, 0 = fog)
  *   G = plane type (0-7 stored as direct byte, decoded via round(g * 255))
  *   B = planar intensity (0.0-1.0 → 0-255)
- *   A = sector boundary (255 if any neighbor belongs to a different sector, 0 otherwise)
+ *   A = packed: terrain_id (bits 7-4) + sector boundary (bit 0)
+ *       Shader decodes: terrain_id = byte >> 4, sector_boundary = byte & 1
  *
  * Texture size: (gridRadius * 2 + 1) squared.
  * Hex (q, r) maps to pixel (q + gridRadius, r + gridRadius).
@@ -92,15 +94,20 @@ export class HexStateTexture {
         data[off + 2] = Math.min(255, Math.round(hex.planarIntensity * 255));
       }
 
-      // A = sector boundary: mark if any neighbor belongs to a different sector
+      // A = packed: terrain_id (high nibble) + sector boundary (bit 0)
+      // Use baseTerrain (always 0-7) so tile color comes from pre-mutation type.
+      // Planar visual effects in Layer 4 handle mutation appearance.
+      const terrainId = TERRAIN_TYPE_TO_ID[hex.baseTerrain] ?? 0;
+      let sectorBoundary = 0;
       const sector = getSectorID(q, r, sectorSpacing);
       for (const [dq, dr] of NEIGHBORS) {
         const ns = getSectorID(q + dq, r + dr, sectorSpacing);
         if (ns.q !== sector.q || ns.r !== sector.r) {
-          data[off + 3] = 255;
+          sectorBoundary = 1;
           break;
         }
       }
+      data[off + 3] = terrainId * 16 + sectorBoundary;
     }
 
     this.device.queue.writeTexture(

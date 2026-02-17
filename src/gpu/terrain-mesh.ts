@@ -1,8 +1,7 @@
 import { WorldGenConfig } from '../core/types';
 import { sampleTerrain } from '../core/terrain';
-import { pixelToHex, hexToPixel } from '../core/geometry';
 import { TERRAIN, RENDER } from '../core/config';
-import { MESH_VERTEX_STRIDE, TERRAIN_TYPE_TO_ID } from './types';
+import { MESH_VERTEX_STRIDE } from './types';
 
 export interface MeshBuffers {
   readonly vertices: Float32Array;
@@ -27,15 +26,15 @@ function karstHeight(h: number): number {
   return cliff * peak;
 }
 
+// Layer 1 (Geometry): Pure heightfield displacement. No terrain type awareness.
+// Rivers have elevation = seaLevel (set by sampleTerrain), so they naturally get y=0.
 function computeDisplacedY(
   elevation: number,
-  terrainId: number,
   seaLevel: number,
   landRange: number,
   heightScale: number,
 ): number {
-  const isRiver = terrainId < 0.5 && elevation >= seaLevel;
-  if (!isRiver && elevation >= seaLevel && landRange > 0) {
+  if (elevation >= seaLevel && landRange > 0) {
     const normElev = (elevation - seaLevel) / landRange;
     return karstHeight(normElev) * heightScale;
   }
@@ -46,10 +45,13 @@ function computeDisplacedY(
  * Build a regular triangle-grid terrain mesh covering a circular world area.
  *
  * Vertices are placed on a regular grid with `spacing` distance apart.
- * Each vertex samples the continuous terrain field for elevation/moisture/terrainId.
+ * Each vertex samples the continuous terrain field for elevation and moisture.
  * Smooth normals are computed from displaced height via central differences.
  * Vertices outside the world circle (gridRadius hexes × hexSize × sqrt(3)) are culled.
  * Triangle pairs fill each grid cell; degenerate triangles at the boundary are skipped.
+ *
+ * Layer 1 (Geometry): This mesh knows nothing about hexes. Terrain type is resolved
+ * per-fragment in the shader via hex state texture lookup (Layer 3).
  */
 export function buildTerrainMesh(
   config: WorldGenConfig,
@@ -83,13 +85,9 @@ export function buildTerrainMesh(
   const displacedY = new Float32Array(maxVerts);
   const elevations = new Float32Array(maxVerts);
   const moistures = new Float32Array(maxVerts);
-  const terrainIds = new Float32Array(maxVerts);
   // Grid col/row for each vertex (needed for neighbor lookup in pass 2)
   const vertCol = new Int32Array(maxVerts);
   const vertRow = new Int32Array(maxVerts);
-
-  // Cache hex-center terrain IDs for per-hex quantization (~13K entries)
-  const hexCenterTerrainCache = new Map<string, number>();
 
   let vertCount = 0;
 
@@ -104,25 +102,11 @@ export function buildTerrainMesh(
 
       const sample = sampleTerrain(x, z, config);
 
-      // Resolve terrain type at hex center (per-hex quantization):
-      // All vertices in the same hex get the same terrain type for crisp biome boundaries,
-      // while elevation/moisture remain per-vertex for smooth height and color gradients.
-      const hexCoord = pixelToHex(x, z, hexSize);
-      const hexKey = `${hexCoord.q},${hexCoord.r}`;
-      let tid = hexCenterTerrainCache.get(hexKey);
-      if (tid === undefined) {
-        const center = hexToPixel(hexCoord.q, hexCoord.r, hexSize);
-        const centerSample = sampleTerrain(center.x, center.y, config);
-        tid = TERRAIN_TYPE_TO_ID[centerSample.terrain] ?? 2;
-        hexCenterTerrainCache.set(hexKey, tid);
-      }
-
       posX[vertCount] = x;
       posZ[vertCount] = z;
       elevations[vertCount] = sample.elevation;
       moistures[vertCount] = sample.moisture;
-      terrainIds[vertCount] = tid;
-      displacedY[vertCount] = computeDisplacedY(sample.elevation, tid, seaLevel, landRange, heightScale);
+      displacedY[vertCount] = computeDisplacedY(sample.elevation, seaLevel, landRange, heightScale);
       vertCol[vertCount] = col;
       vertRow[vertCount] = row;
 
@@ -167,10 +151,9 @@ export function buildTerrainMesh(
     vertexData[off + 1] = posZ[i]!;
     vertexData[off + 2] = elevations[i]!;
     vertexData[off + 3] = moistures[i]!;
-    vertexData[off + 4] = terrainIds[i]!;
-    vertexData[off + 5] = nx;
-    vertexData[off + 6] = ny;
-    vertexData[off + 7] = nz;
+    vertexData[off + 4] = nx;
+    vertexData[off + 5] = ny;
+    vertexData[off + 6] = nz;
   }
 
   // --- Build index buffer ---

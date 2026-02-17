@@ -386,6 +386,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   } else if (is_river) {
     terrain = T_WATER;
     flavor = F_RIVER;
+    // Rivers carry flat elevation: geometry layer doesn't need terrain type to flatten them.
+    elevation = sea_level;
   } else if (elevation > hill_threshold) {
     terrain = T_HILL;
     if (moisture > forest_threshold) { flavor = F_WOODED_HILLS; }

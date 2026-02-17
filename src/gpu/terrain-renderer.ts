@@ -34,15 +34,16 @@ struct Uniforms {
 @group(0) @binding(1) var hex_state_tex: texture_2d<f32>;
 
 // ============================================================
-// Vertex shader
+// LAYER 1: Geometry (Vertex Shader)
+// Pure heightfield: elevation → displaced Y, smooth normals.
+// No hex awareness. Rivers have elevation = seaLevel (flat by data, not override).
 // ============================================================
 
 struct VertexIn {
   @location(0) pos_xz: vec2f,
   @location(1) elevation: f32,
   @location(2) moisture: f32,
-  @location(3) terrain_id: f32,
-  @location(4) normal: vec3f,
+  @location(3) normal: vec3f,
 }
 
 struct VertexOut {
@@ -50,8 +51,7 @@ struct VertexOut {
   @location(0) world_pos: vec3f,
   @location(1) elevation: f32,
   @location(2) moisture: f32,
-  @location(3) terrain_id: f32,
-  @location(4) smooth_normal: vec3f,
+  @location(3) smooth_normal: vec3f,
 }
 
 // Karst terrain profile: flat valleys, steep cliff walls, tower peaks
@@ -67,9 +67,10 @@ fn vs_main(in: VertexIn) -> VertexOut {
   let sea = u.sea_level;
   let land_range = 1.0 - sea;
 
+  // Pure elevation-based displacement. Rivers have elevation = seaLevel,
+  // so normElev = 0 → karstHeight(0) = 0 → no displacement. No terrain type needed.
   var y: f32 = 0.0;
-  let is_river = in.terrain_id < 0.5 && in.elevation >= sea;
-  if (!is_river && in.elevation >= sea && land_range > 0.0) {
+  if (in.elevation >= sea && land_range > 0.0) {
     let norm_elev = (in.elevation - sea) / land_range;
     y = karst_height(norm_elev) * u.height_scale;
   }
@@ -82,13 +83,12 @@ fn vs_main(in: VertexIn) -> VertexOut {
   out.world_pos = world;
   out.elevation = in.elevation;
   out.moisture = in.moisture;
-  out.terrain_id = in.terrain_id;
   out.smooth_normal = in.normal;
   return out;
 }
 
 // ============================================================
-// Fragment shader
+// Fragment shader utilities
 // ============================================================
 
 const PI: f32 = 3.14159265359;
@@ -199,10 +199,9 @@ const SUN_COLOR: vec3f = vec3f(1.0, 0.95, 0.85);  // warm sunlight
 const SKY_COLOR: vec3f = vec3f(0.55, 0.65, 0.85);  // cool ambient
 const ROCK_COLOR: vec3f = vec3f(0.42, 0.38, 0.35);  // exposed cliff rock
 const FOG_DENSITY: f32 = 0.00003;
-const FOG_COLOR: vec3f = vec3f(0.6, 0.68, 0.82);
 
 // ============================================================
-// Biome color from elevation/moisture (no lighting yet)
+// Water color helper
 // ============================================================
 
 fn water_base_color(elevation: f32, world_xz: vec2f) -> vec3f {
@@ -220,58 +219,6 @@ fn water_base_color(elevation: f32, world_xz: vec2f) -> vec3f {
   return water;
 }
 
-fn biome_color(elevation: f32, moisture: f32, terrain_id: f32, world_xz: vec2f) -> vec3f {
-  let sea = u.sea_level;
-  let is_water = terrain_id < 0.5 || elevation < sea;
-
-  if (is_water) {
-    return water_base_color(elevation, world_xz);
-  }
-
-  // --- Land biome blending (moisture axis) ---
-  let m = moisture;
-  let trans = 0.06;
-
-  let desert_col = u.terrain_colors[1].rgb;
-  let plain_col  = u.terrain_colors[2].rgb;
-  let forest_col = u.terrain_colors[3].rgb;
-  let marsh_col  = u.terrain_colors[4].rgb;
-  let hill_col   = u.terrain_colors[5].rgb;
-  let mtn_col    = u.terrain_colors[6].rgb;
-
-  let desert_w = 1.0 - smoothstep(u.moisture_desert - trans, u.moisture_desert + trans, m);
-  let marsh_w  = smoothstep(u.moisture_marsh - trans, u.moisture_marsh + trans, m);
-  let forest_w = smoothstep(u.moisture_forest - trans, u.moisture_forest + trans, m) * (1.0 - marsh_w);
-  let plain_w  = max(0.0, 1.0 - desert_w - forest_w - marsh_w);
-
-  var base = desert_col * desert_w + plain_col * plain_w + forest_col * forest_w + marsh_col * marsh_w;
-
-  // --- Forest density darkening: high-moisture areas get denser canopy ---
-  let forest_density = smoothstep(u.moisture_forest, u.moisture_marsh, m);
-  let canopy_dark = forest_density * 0.2;
-  let tree_var = (value_noise(world_xz * 0.08) - 0.5) * forest_density * 0.15;
-  base *= (1.0 - canopy_dark);
-  base.g += tree_var;
-
-  // Elevation axis: blend toward hill/mountain
-  let hill_t = smoothstep(u.hill_threshold - 0.05, u.hill_threshold + 0.05, elevation);
-  let mtn_t  = smoothstep(u.mountain_threshold - 0.05, u.mountain_threshold + 0.05, elevation);
-  base = mix(base, hill_col, hill_t * (1.0 - mtn_t));
-  base = mix(base, mtn_col, mtn_t);
-
-  // --- Multi-frequency noise variation (amplified for visibility) ---
-  let low_noise  = (fbm3(world_xz * 0.003) - 0.5) * 0.25;  // large patches
-  let mid_noise  = (value_noise(world_xz * 0.02) - 0.5) * 0.15;  // geological
-  let high_noise = (value_noise(world_xz * 0.12) - 0.5) * 0.08;  // surface grain
-  let noise_sum = low_noise + mid_noise + high_noise;
-  base *= (1.0 + noise_sum);
-  // Stronger hue shift on low-frequency noise
-  base.r *= (1.0 + low_noise * 0.5);
-  base.b *= (1.0 - low_noise * 0.3);
-
-  return base;
-}
-
 // ============================================================
 // ACES filmic tone mapping
 // ============================================================
@@ -286,39 +233,47 @@ fn aces_tonemap(x: vec3f) -> vec3f {
 }
 
 // ============================================================
-// Main fragment shader
+// Main fragment shader — layered architecture
+//
+// Layer 3 (Hex Tile Identity): pixel_to_hex → texture lookup → terrain type
+// Layer 2 (Surface Material): tile base color + noise/rock/snow/lighting
+// Layer 4 (Game State): planar effects, fog of war
+// Layer 5 (Post-Processing): grid overlay, atmosphere, tone mapping
 // ============================================================
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let sun_dir = normalize(SUN_DIR);
   let sea = u.sea_level;
-  let is_water = in.terrain_id < 0.5 || in.elevation < sea;
-
-  // --- Smooth pre-computed normal (from vertex data) ---
+  let view_dir = normalize(u.eye_pos - in.world_pos);
   let normal = normalize(in.smooth_normal);
   let slope = 1.0 - abs(normal.y);
 
-  // --- View direction (shared by water, rim light, roughness) ---
-  let view_dir = normalize(u.eye_pos - in.world_pos);
+  // ═══════════════════════════════════════════════════════════════
+  // LAYER 3: Hex Tile Identity
+  // Resolve which hex this fragment belongs to and read per-hex state.
+  // All per-hex decisions flow from this single texture lookup.
+  // ═══════════════════════════════════════════════════════════════
 
-  // --- Curvature approximation (from elevation screen-space derivatives) ---
-  let ddx_e = dpdx(in.elevation);
-  let ddy_e = dpdy(in.elevation);
-  let curvature = clamp((dpdx(ddx_e) + dpdy(ddy_e)) * 200.0, -1.0, 1.0);
-
-  // --- Base biome color ---
-  var color = biome_color(in.elevation, in.moisture, in.terrain_id, in.world_pos.xz);
-
-  // --- Resolve hex once (single pixel_to_hex call for all hex-based lookups) ---
   let hex = pixel_to_hex(in.world_pos.x, in.world_pos.z, u.hex_size);
+  let hex_state = lookup_hex_state(hex.qr, u.grid_radius);
+  let a_byte = u32(round(hex_state.a * 255.0));
+  let hex_terrain_id = a_byte >> 4u;
+  let ring_boundary = (a_byte & 1u) > 0u;
+  let is_water = hex_terrain_id == 0u || in.elevation < sea;
 
-  // --- Per-hex color variation (each tile subtly distinct) ---
-  let hex_hash = hash2(hex.qr * 0.73 + vec2f(17.3, 31.7));
-  color *= (0.95 + hex_hash * 0.10);
+  // ═══════════════════════════════════════════════════════════════
+  // LAYER 2: Surface Material
+  // Base color from discrete terrain type (sharp hex boundaries) +
+  // continuous noise/slope/altitude effects (sub-hex visual richness).
+  // ═══════════════════════════════════════════════════════════════
 
-  // --- Water specular + Fresnel ---
+  var color: vec3f;
+
   if (is_water) {
+    color = water_base_color(in.elevation, in.world_pos.xz);
+
+    // Water specular + Fresnel
     let wn1 = (value_noise(in.world_pos.xz * 0.03) - 0.5) * 0.3;
     let wn2 = (value_noise(in.world_pos.xz * 0.07 + vec2f(50.0, 80.0)) - 0.5) * 0.15;
     let water_normal = normalize(vec3f(wn1, 1.0, wn2));
@@ -330,22 +285,50 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     let NdotV = max(dot(water_normal, view_dir), 0.0);
     let fresnel = pow(1.0 - NdotV, 3.0) * 0.4;
     color = mix(color, SKY_COLOR * 0.8, fresnel);
-  }
+  } else {
+    // --- Tile base from canonical terrain color (sharp per-hex) ---
+    color = u.terrain_colors[hex_terrain_id].rgb;
 
-  if (!is_water) {
-    // --- Noise-textured rock on cliffs ---
+    // Per-hex subtle variation (each tile visually distinct)
+    let hex_hash = hash2(hex.qr * 0.73 + vec2f(17.3, 31.7));
+    color *= (0.92 + hex_hash * 0.16);
+
+    // Subtle moisture modulation within the tile
+    let moisture_shift = (in.moisture - 0.5) * 0.12;
+    color *= (1.0 + moisture_shift);
+
+    // Forest/marsh canopy darkening
+    if (hex_terrain_id == 3u || hex_terrain_id == 4u) {
+      let canopy = value_noise(in.world_pos.xz * 0.08) * 0.15;
+      color *= (1.0 - canopy);
+      color.g += (value_noise(in.world_pos.xz * 0.12) - 0.5) * 0.06;
+    }
+
+    // Multi-frequency noise (visual richness without changing biome identity)
+    let low_noise  = (fbm3(in.world_pos.xz * 0.003) - 0.5) * 0.20;
+    let mid_noise  = (value_noise(in.world_pos.xz * 0.02) - 0.5) * 0.12;
+    let high_noise = (value_noise(in.world_pos.xz * 0.12) - 0.5) * 0.06;
+    color *= (1.0 + low_noise + mid_noise + high_noise);
+    // Low-freq hue shift
+    color.r *= (1.0 + low_noise * 0.4);
+    color.b *= (1.0 - low_noise * 0.25);
+
+    // Noise-textured rock on cliffs
     let rock_strata = fbm3(in.world_pos.xz * 0.05);
     let rock_grain = value_noise(in.world_pos.xz * 0.2);
     let textured_rock = ROCK_COLOR * (0.8 + rock_strata * 0.3 + rock_grain * 0.1);
     let rock_blend = smoothstep(0.2, 0.55, slope);
     color = mix(color, textured_rock, rock_blend * 0.85);
 
-    // --- Curvature accent ---
+    // Curvature accent
+    let ddx_e = dpdx(in.elevation);
+    let ddy_e = dpdy(in.elevation);
+    let curvature = clamp((dpdx(ddx_e) + dpdy(ddy_e)) * 200.0, -1.0, 1.0);
     let ridge_light = max(0.0, curvature) * 0.35;
     let valley_dark = max(0.0, -curvature) * 0.4;
     color *= (1.0 + ridge_light - valley_dark);
 
-    // --- Altitude desaturation + textured snow ---
+    // Altitude desaturation + textured snow
     let land_range = 1.0 - sea;
     let norm_elev = select(0.0, (in.elevation - sea) / land_range, land_range > 0.0);
 
@@ -362,7 +345,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     let snow_color = vec3f(0.90, 0.93, 0.97) + vec3f(snow_fine * 0.08);
     color = mix(color, snow_color, snow_t);
 
-    // --- Material roughness: wet lowlands get specular, dry highlands are matte ---
+    // Material roughness: wet lowlands get specular, dry highlands are matte
     let roughness = mix(0.3, 0.95, smoothstep(0.0, 0.5, norm_elev));
     let half_vec = normalize(sun_dir + view_dir);
     let NdotH = max(dot(normal, half_vec), 0.0);
@@ -386,28 +369,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     color += rim * rim_sun * SUN_COLOR * 0.15;
   }
 
-  // --- Hex grid overlay (SDF, uses hex.edge_dist from earlier pixel_to_hex) ---
-  let edge_dist = hex.edge_dist;
-  let edge_aa = fwidth(edge_dist);
-  var grid_line = smoothstep(0.5 - edge_aa * 2.0, 0.5, edge_dist);
-  var grid_opacity = u.hex_grid_opacity;
+  // ═══════════════════════════════════════════════════════════════
+  // LAYER 4: Per-Hex Game State
+  // Planar effects and fog of war. Only modifies existing color.
+  // Reads from the same hex_state texture already looked up in Layer 3.
+  // ═══════════════════════════════════════════════════════════════
 
-  // --- Hex state (fog of war + planar effects) ---
-  let hex_state = lookup_hex_state(hex.qr, u.grid_radius);
   let explored = hex_state.r;
   let plane_type = u32(round(hex_state.g * 255.0));
   let p_intensity = hex_state.b;
-  let ring_boundary = hex_state.a;
 
-  // Sector boundary borders (thicker lines between tiled hex groups)
-  if (ring_boundary > 0.5) {
-    grid_line = max(grid_line, smoothstep(0.45 - edge_aa * 3.0, 0.45, edge_dist));
-    grid_opacity = max(grid_opacity, 0.35);
-  }
-
-  color = mix(color, color * 0.3, grid_line * grid_opacity);
-
-  // --- Per-plane visual effects ---
+  // Per-plane visual effects (only for hexes with active planar influence)
   if (plane_type > 0u) {
     let pi = p_intensity;
     if (plane_type == 1u) {
@@ -469,7 +441,27 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     color = mix(color, fog_grey, u.fog_mix);
   }
 
-  // --- Atmospheric scattering (replaces flat fog) ---
+  // ═══════════════════════════════════════════════════════════════
+  // LAYER 5: Post-Processing
+  // Grid overlay, atmospheric scattering, tone mapping.
+  // Read-only of all prior layers.
+  // ═══════════════════════════════════════════════════════════════
+
+  // Hex grid overlay (SDF from hex.edge_dist computed in Layer 3)
+  let edge_dist = hex.edge_dist;
+  let edge_aa = fwidth(edge_dist);
+  var grid_line = smoothstep(0.5 - edge_aa * 2.0, 0.5, edge_dist);
+  var grid_opacity = u.hex_grid_opacity;
+
+  // Sector boundary borders (thicker lines between tiled hex groups)
+  if (ring_boundary) {
+    grid_line = max(grid_line, smoothstep(0.45 - edge_aa * 3.0, 0.45, edge_dist));
+    grid_opacity = max(grid_opacity, 0.35);
+  }
+
+  color = mix(color, color * 0.3, grid_line * grid_opacity);
+
+  // Atmospheric scattering (replaces flat fog)
   let view_dist = length(in.world_pos - u.eye_pos);
   let view_to_frag = normalize(in.world_pos - u.eye_pos);
   let fog_amount = 1.0 - exp(-view_dist * FOG_DENSITY);
@@ -487,13 +479,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let scatter_color = mix(rayleigh_color, SUN_COLOR, mie);
   color = mix(color, scatter_color, fog_amount);
 
-  // --- World edge fade ---
+  // World edge fade
   let world_dist2 = in.world_pos.x * in.world_pos.x + in.world_pos.z * in.world_pos.z;
   let world_radius = u.grid_radius * u.hex_size * SQRT3;
   let edge_fade = smoothstep(world_radius * world_radius, (world_radius - 200.0) * (world_radius - 200.0), world_dist2);
   color *= edge_fade;
 
-  // --- ACES filmic tone mapping ---
+  // ACES filmic tone mapping
   color = aces_tonemap(color * 0.95);
 
   return vec4f(clamp(color, vec3f(0.0), vec3f(1.0)), 1.0);
@@ -581,8 +573,7 @@ export class TerrainRenderer {
             { shaderLocation: 0, offset: 0, format: 'float32x2' },   // pos_xz
             { shaderLocation: 1, offset: 8, format: 'float32' },     // elevation
             { shaderLocation: 2, offset: 12, format: 'float32' },    // moisture
-            { shaderLocation: 3, offset: 16, format: 'float32' },    // terrain_id
-            { shaderLocation: 4, offset: 20, format: 'float32x3' },  // normal
+            { shaderLocation: 3, offset: 16, format: 'float32x3' },  // normal
           ],
         }],
       },
