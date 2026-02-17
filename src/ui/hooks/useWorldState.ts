@@ -1,32 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { HexData, WorldGenConfig, PlanarOverlay, PlanarAlignment, HistoryAction, WorldState } from '../../core/types';
-import { DEFAULT_WORLD_CONFIG } from '../../core/config';
+import { WorldEngine } from '../../core/engine';
 import { regenerateTerrain } from '../../core/world';
 import { applyOverlaysToMap } from '../../core/planar';
-import { applyAction, EMPTY_STATE, replayFrom } from '../../core/history';
 import { getGpuContext, TerrainCompute, terrainFromId, elementFromId, flavorFromId } from '../../gpu';
 
-const INITIAL_ACTION: HistoryAction = { type: 'generateWorld', config: DEFAULT_WORLD_CONFIG };
-const INITIAL_STATE = applyAction(EMPTY_STATE, INITIAL_ACTION);
-
-interface History {
-  actions: HistoryAction[];
-  cache: WorldState[];       // cache[i] = state after actions[0..i]
-  redoStack: HistoryAction[];
-}
-
 export const useWorldState = () => {
-  // --- History (committed action log + cached states) ---
-  const [history, setHistory] = useState<History>({
-    actions: [INITIAL_ACTION],
-    cache: [INITIAL_STATE],
-    redoStack: [],
-  });
-  const historyRef = useRef(history);
-  historyRef.current = history;
+  const engineRef = useRef(WorldEngine.create());
 
   // Live state: what the UI renders. Equals committed state except during preview/drag.
-  const [liveState, setLiveState] = useState<WorldState>(INITIAL_STATE);
+  const [liveState, setLiveState] = useState<WorldState>(engineRef.current.state);
   const liveStateRef = useRef(liveState);
   liveStateRef.current = liveState;
 
@@ -39,70 +22,30 @@ export const useWorldState = () => {
   const planarOverlays = liveState.overlays;
   const worldConfig = liveState.config;
   const selectedHex = hexes.find(h => h.id === selectedHexId) ?? null;
-  const canUndo = history.actions.length > 1;
-  const canRedo = history.redoStack.length > 0;
+  const canUndo = engineRef.current.canUndo;
+  const canRedo = engineRef.current.canRedo;
 
   // --- Dispatch: commit an action to history ---
   const dispatch = useCallback((action: HistoryAction) => {
-    const h = historyRef.current;
-    const prevState = h.cache[h.cache.length - 1] ?? EMPTY_STATE;
-    const newState = applyAction(prevState, action);
-
-    setHistory({
-      actions: [...h.actions, action],
-      cache: [...h.cache, newState],
-      redoStack: [],
-    });
-    setLiveState(newState);
+    engineRef.current.dispatch(action);
+    setLiveState(engineRef.current.state);
   }, []);
 
   // --- Undo / Redo ---
   const undo = useCallback(() => {
-    const h = historyRef.current;
-    if (h.actions.length <= 1) return;
-
-    const undone = h.actions[h.actions.length - 1]!;
-    const newActions = h.actions.slice(0, -1);
-    const newCache = h.cache.slice(0, -1);
-    const newState = newCache[newCache.length - 1] ?? EMPTY_STATE;
-
-    setHistory({
-      actions: newActions,
-      cache: newCache,
-      redoStack: [undone, ...h.redoStack],
-    });
-    setLiveState(newState);
+    engineRef.current.undo();
+    setLiveState(engineRef.current.state);
   }, []);
 
   const redo = useCallback(() => {
-    const h = historyRef.current;
-    if (h.redoStack.length === 0) return;
-
-    const action = h.redoStack[0]!;
-    const prevState = h.cache[h.cache.length - 1] ?? EMPTY_STATE;
-    const newState = applyAction(prevState, action);
-
-    setHistory({
-      actions: [...h.actions, action],
-      cache: [...h.cache, newState],
-      redoStack: h.redoStack.slice(1),
-    });
-    setLiveState(newState);
+    engineRef.current.redo();
+    setLiveState(engineRef.current.state);
   }, []);
 
   // --- Remove a specific action (selective undo) ---
   const removeAction = useCallback((index: number) => {
-    const h = historyRef.current;
-    if (index <= 0 || index >= h.actions.length) return;
-
-    const newActions = [...h.actions.slice(0, index), ...h.actions.slice(index + 1)];
-    const baseState = h.cache[index - 1] ?? EMPTY_STATE;
-    const replayedCache = replayFrom(baseState, newActions, index);
-    const newCache = [...h.cache.slice(0, index), ...replayedCache];
-    const newState = newCache[newCache.length - 1] ?? EMPTY_STATE;
-
-    setHistory({ actions: newActions, cache: newCache, redoStack: [] });
-    setLiveState(newState);
+    engineRef.current.removeAction(index);
+    setLiveState(engineRef.current.state);
   }, []);
 
   // --- GPU Compute (async init, shared device singleton) ---
@@ -119,7 +62,7 @@ export const useWorldState = () => {
       try {
         const compute = TerrainCompute.create(ctx.device, 20000);
         // Upload initial hex coordinates
-        const hexes = historyRef.current.cache[historyRef.current.cache.length - 1]?.hexes ?? [];
+        const hexes = engineRef.current.hexes;
         if (hexes.length > 0) {
           compute.setCoords(hexes.map(h => h.coordinates));
           gpuCoordsCountRef.current = hexes.length;
@@ -140,7 +83,7 @@ export const useWorldState = () => {
   // --- Live Preview (no history entry) ---
 
   const previewWorldConfig = useCallback((config: WorldGenConfig, preserveExplored: boolean) => {
-    const committed = historyRef.current.cache[historyRef.current.cache.length - 1] ?? EMPTY_STATE;
+    const committed = engineRef.current.state;
     const compute = gpuComputeRef.current;
 
     if (compute && committed.hexes.length > 0) {
@@ -200,8 +143,7 @@ export const useWorldState = () => {
   }, []);
 
   const cancelPreview = useCallback(() => {
-    const committed = historyRef.current.cache[historyRef.current.cache.length - 1] ?? EMPTY_STATE;
-    setLiveState(committed);
+    setLiveState(engineRef.current.state);
   }, []);
 
   // --- Commit live changes ---
@@ -224,9 +166,6 @@ export const useWorldState = () => {
   }, [dispatch]);
 
   const updateHex = useCallback((updatedHex: HexData) => {
-    // TODO: For truly correct selective removal, store only changed fields.
-    // Currently stores full hex — fine for linear undo, edge-case wrong for
-    // selective removal of interleaved edits on the same hex.
     dispatch({ type: 'updateHex', hexId: updatedHex.id, changes: updatedHex });
   }, [dispatch]);
 
@@ -267,7 +206,7 @@ export const useWorldState = () => {
     planarOverlays,
 
     // History
-    actions: history.actions,
+    actions: engineRef.current.actions,
     canUndo,
     canRedo,
     undo,

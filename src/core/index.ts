@@ -33,5 +33,8 @@ export { computeHexState, applyOverlaysToMap, resolveChemistry } from './planar'
 // History engine
 export { applyAction, replayFrom, getActionLabel, EMPTY_STATE } from './history';
 
+// World engine (pure state machine — no React, no GPU)
+export { WorldEngine } from './engine';
+
 // Geometry (public surface — hex<->pixel conversions and distance)
 export { hexToPixel, pixelToHex, getHexDistance, hexLine } from './geometry';

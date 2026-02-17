@@ -26,7 +26,7 @@ interface WorldSidebarProps {
   onRedo: () => void;
   canUndo: boolean;
   canRedo: boolean;
-  actions: HistoryAction[];
+  actions: readonly HistoryAction[];
   onRemoveAction: (index: number) => void;
   // Planar
   overlays: PlanarOverlay[];
