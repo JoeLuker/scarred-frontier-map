@@ -1,5 +1,6 @@
 import { WorldGenConfig } from '../core/types';
 import { sampleTerrain } from '../core/terrain';
+import { pixelToHex, hexToPixel } from '../core/geometry';
 import { TERRAIN, RENDER } from '../core/config';
 import { MESH_VERTEX_STRIDE } from './types';
 
@@ -99,6 +100,9 @@ export function buildTerrainMesh(
   const vertCol = new Int32Array(maxVerts);
   const vertRow = new Int32Array(maxVerts);
 
+  // Cache hex-center terrain IDs for per-hex quantization (~13K entries)
+  const hexCenterTerrainCache = new Map<string, number>();
+
   let vertCount = 0;
 
   for (let row = 0; row < rows; row++) {
@@ -111,7 +115,19 @@ export function buildTerrainMesh(
       gridToVert[gridIdx] = vertCount;
 
       const sample = sampleTerrain(x, z, config);
-      const tid = TERRAIN_TYPE_IDS[sample.terrain] ?? 2;
+
+      // Resolve terrain type at hex center (per-hex quantization):
+      // All vertices in the same hex get the same terrain type for crisp biome boundaries,
+      // while elevation/moisture remain per-vertex for smooth height and color gradients.
+      const hexCoord = pixelToHex(x, z, hexSize);
+      const hexKey = `${hexCoord.q},${hexCoord.r}`;
+      let tid = hexCenterTerrainCache.get(hexKey);
+      if (tid === undefined) {
+        const center = hexToPixel(hexCoord.q, hexCoord.r, hexSize);
+        const centerSample = sampleTerrain(center.x, center.y, config);
+        tid = TERRAIN_TYPE_IDS[centerSample.terrain] ?? 2;
+        hexCenterTerrainCache.set(hexKey, tid);
+      }
 
       posX[vertCount] = x;
       posZ[vertCount] = z;

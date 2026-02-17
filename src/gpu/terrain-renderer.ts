@@ -167,6 +167,31 @@ fn sample_hex_state(wx: f32, wz: f32, hex_size: f32, grid_radius: f32) -> vec4f 
 }
 
 // ============================================================
+// World position → hex axial coordinates (rounded)
+// ============================================================
+
+fn world_to_hex(wx: f32, wz: f32, hex_size: f32) -> vec2f {
+  let inv_sqrt3 = 1.0 / SQRT3;
+  let fq = (inv_sqrt3 * wx / hex_size) - (wz / (3.0 * hex_size));
+  let fr = (2.0 / 3.0) * wz / hex_size;
+  let fx = fq;
+  let fz = fr;
+  let fy = -fx - fz;
+  var rq = round(fx);
+  var rr = round(fz);
+  let ry = round(fy);
+  let dx = abs(rq - fx);
+  let dy = abs(ry - fy);
+  let dz = abs(rr - fz);
+  if (dx > dy && dx > dz) {
+    rq = -ry - rr;
+  } else if (dy <= dz) {
+    rr = -rq - ry;
+  }
+  return vec2f(rq, rr);
+}
+
+// ============================================================
 // Hash / noise utilities (GPU-side, no textures needed)
 // ============================================================
 
@@ -319,6 +344,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   // --- Base biome color ---
   var color = biome_color(in.elevation, in.moisture, in.terrain_id, in.world_pos.xz);
 
+  // --- Per-hex color variation (each tile subtly distinct) ---
+  let hex_qr = world_to_hex(in.world_pos.x, in.world_pos.z, u.hex_size);
+  let hex_hash = hash2(hex_qr * 0.73 + vec2f(17.3, 31.7));
+  color *= (0.95 + hex_hash * 0.10);
+
   // --- Water specular + Fresnel ---
   if (is_water) {
     let wn1 = (value_noise(in.world_pos.xz * 0.03) - 0.5) * 0.3;
@@ -391,17 +421,77 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   // --- Hex grid overlay (SDF) ---
   let edge_dist = hex_edge_distance(in.world_pos.x, in.world_pos.z, u.hex_size);
   let edge_aa = fwidth(edge_dist);
-  let grid_line = smoothstep(0.5 - edge_aa * 2.0, 0.5, edge_dist);
-  color = mix(color, color * 0.3, grid_line * u.hex_grid_opacity);
+  var grid_line = smoothstep(0.5 - edge_aa * 2.0, 0.5, edge_dist);
+  var grid_opacity = u.hex_grid_opacity;
 
-  // --- Hex state (fog of war + planar tint) ---
+  // --- Hex state (fog of war + planar effects) ---
   let hex_state = sample_hex_state(in.world_pos.x, in.world_pos.z, u.hex_size, u.grid_radius);
   let explored = hex_state.r;
-  let tint_color = hex_state.gba;
-  let has_tint = step(0.01, tint_color.r + tint_color.g + tint_color.b);
+  let plane_type = u32(round(hex_state.g * 7.0));
+  let p_intensity = hex_state.b;
+  let ring_boundary = hex_state.a;
 
-  if (has_tint > 0.5) {
-    color = mix(color, tint_color, 0.3);
+  // Sector boundary borders (thicker lines between tiled hex groups)
+  if (ring_boundary > 0.5) {
+    grid_line = max(grid_line, smoothstep(0.45 - edge_aa * 3.0, 0.45, edge_dist));
+    grid_opacity = max(grid_opacity, 0.35);
+  }
+
+  color = mix(color, color * 0.3, grid_line * grid_opacity);
+
+  // --- Per-plane visual effects ---
+  if (plane_type > 0u) {
+    let pi = p_intensity;
+    if (plane_type == 1u) {
+      // FIRE: Orange emissive glow + red saturation boost + heat shimmer
+      color += vec3f(1.0, 0.4, 0.1) * pi * 0.4;
+      let fire_lum = dot(color, vec3f(0.299, 0.587, 0.114));
+      color.r = mix(fire_lum, color.r, 1.0 + pi * 0.5);
+      let shimmer = sin(in.world_pos.x * 0.1 + in.world_pos.z * 0.08) * pi * 0.05;
+      color += vec3f(shimmer, shimmer * 0.5, 0.0);
+    } else if (plane_type == 2u) {
+      // WATER: Darken + blue/green saturation + wet specular sheen
+      color *= (1.0 - pi * 0.3);
+      let w_lum = dot(color, vec3f(0.299, 0.587, 0.114));
+      color.b = mix(w_lum, color.b, 1.0 + pi * 0.6);
+      color.g = mix(w_lum, color.g, 1.0 + pi * 0.3);
+      let half_v = normalize(sun_dir + view_dir);
+      let sheen = pow(max(dot(normal, half_v), 0.0), 32.0) * pi * 0.3;
+      color += vec3f(sheen) * vec3f(0.6, 0.8, 1.0);
+    } else if (plane_type == 3u) {
+      // EARTH: Warm brown tint + rocky noise amplification + mild desaturation
+      let earth_lum = dot(color, vec3f(0.299, 0.587, 0.114));
+      color = mix(color, vec3f(0.55, 0.35, 0.2) * earth_lum * 2.0, pi * 0.35);
+      let rock_n = (value_noise(in.world_pos.xz * 0.08) - 0.5) * pi * 0.2;
+      color *= (1.0 + rock_n);
+      let earth_gray = dot(color, vec3f(0.299, 0.587, 0.114));
+      color = mix(color, vec3f(earth_gray), pi * 0.2);
+    } else if (plane_type == 4u) {
+      // AIR: Ethereal brightening + desaturation toward cool white-blue
+      color *= (1.0 + pi * 0.3);
+      let air_lum = dot(color, vec3f(0.299, 0.587, 0.114));
+      color = mix(color, vec3f(0.85, 0.9, 1.0) * air_lum * 1.2, pi * 0.45);
+    } else if (plane_type == 5u) {
+      // POSITIVE: Golden additive glow + brightness boost
+      color += vec3f(1.0, 0.85, 0.3) * pi * 0.25;
+      color *= (1.0 + pi * 0.2);
+    } else if (plane_type == 6u) {
+      // NEGATIVE: Strong darkening + heavy desaturation toward purple-grey
+      color *= (1.0 - pi * 0.5);
+      let neg_lum = dot(color, vec3f(0.299, 0.587, 0.114));
+      color = mix(color, vec3f(0.4, 0.3, 0.5) * neg_lum * 1.5, pi * 0.6);
+    } else if (plane_type == 7u) {
+      // SCAR: Noise-driven channel distortion + partial color inversion
+      let scar_n = value_noise(in.world_pos.xz * 0.06 + vec2f(42.0, 17.0));
+      let distort = (scar_n - 0.5) * pi * 0.4;
+      color = vec3f(
+        color.r + distort * color.b,
+        color.g - distort * 0.5,
+        color.b + distort * color.r
+      );
+      let inv = 1.0 - color;
+      color = mix(color, inv, pi * 0.25);
+    }
   }
 
   // Fog-of-war: desaturation + darken
