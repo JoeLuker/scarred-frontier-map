@@ -19,13 +19,15 @@ import {
 } from '../../gpu';
 
 // ===================================================================
-// Pre-computed terrain color array for GPU uniform upload (8 × RGBA)
+// Pre-computed terrain color array for GPU uniform upload (11 × RGBA)
 // Uses TERRAIN_ORDER from gpu/types.ts (single source of truth for ID→type mapping)
+// IDs 0-7: base types, 8-10: mutation-only (Magma, Crystal, Floating)
 // ===================================================================
 
 function buildTerrainColorArray(): Float32Array {
-  const colors = new Float32Array(32); // 8 × 4 (rgba)
-  for (let i = 0; i < 8; i++) {
+  const count = TERRAIN_ORDER.length; // 11
+  const colors = new Float32Array(count * 4);
+  for (let i = 0; i < count; i++) {
     const hex = TERRAIN_COLORS[TERRAIN_ORDER[i]!];
     const { r, g, b } = hexToRgb(hex);
     colors[i * 4] = r / 255;

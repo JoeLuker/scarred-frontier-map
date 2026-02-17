@@ -12,22 +12,22 @@ function createTerrainShader(): string {
 // ============================================================
 
 struct Uniforms {
-  view_proj: mat4x4f,              // 0-63
-  height_scale: f32,               // 64
-  hex_size: f32,                   // 68
-  sea_level: f32,                  // 72
-  mountain_threshold: f32,         // 76
-  hill_threshold: f32,             // 80
-  grid_radius: f32,                // 84
-  moisture_desert: f32,            // 88
-  moisture_forest: f32,            // 92
-  moisture_marsh: f32,             // 96
-  hex_grid_opacity: f32,           // 100
-  fog_mix: f32,                    // 104
-  _pad0: f32,                      // 108
-  terrain_colors: array<vec4f, 8>, // 112-239
-  eye_pos: vec3f,                  // 240-251
-  _pad1: f32,                      // 252-255
+  view_proj: mat4x4f,               // 0-63
+  height_scale: f32,                // 64
+  hex_size: f32,                    // 68
+  sea_level: f32,                   // 72
+  mountain_threshold: f32,          // 76
+  hill_threshold: f32,              // 80
+  grid_radius: f32,                 // 84
+  moisture_desert: f32,             // 88
+  moisture_forest: f32,             // 92
+  moisture_marsh: f32,              // 96
+  hex_grid_opacity: f32,            // 100
+  fog_mix: f32,                     // 104
+  _pad0: f32,                       // 108
+  terrain_colors: array<vec4f, 11>, // 112-287 (8 base + 3 mutation-only)
+  eye_pos: vec3f,                   // 288-299
+  _pad1: f32,                       // 300-303
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -507,7 +507,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
 }
 
 // --- Uniform buffer layout (256 bytes) ---
-const UNIFORM_SIZE = 256;
+const UNIFORM_SIZE = 304;
 const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus';
 
 export class TerrainRenderer {
@@ -638,10 +638,10 @@ export class TerrainRenderer {
     moistureMarsh: number,
     hexGridOpacity: number,
     fogMix: number,
-    terrainColors: Float32Array, // 8 × 4 = 32 floats (rgba per terrain type)
+    terrainColors: Float32Array, // 11 × 4 = 44 floats (rgba per terrain type)
     eyePos: readonly [number, number, number],
   ): void {
-    const data = new Float32Array(UNIFORM_SIZE / 4); // 64 floats
+    const data = new Float32Array(UNIFORM_SIZE / 4); // 76 floats
 
     // viewProj: 16 floats at offset 0
     data.set(viewProj, 0);
@@ -660,14 +660,14 @@ export class TerrainRenderer {
     data[26] = fogMix;
     data[27] = 0; // pad
 
-    // terrainColors: 8 × vec4f = 32 floats at offset 28
-    // array<vec4f, 8> starts at byte 112 = float offset 28
-    data.set(terrainColors.subarray(0, 32), 28);
+    // terrainColors: 11 × vec4f = 44 floats at offset 28
+    // array<vec4f, 11> starts at byte 112 = float offset 28
+    data.set(terrainColors.subarray(0, 44), 28);
 
-    // eye_pos: vec3f at byte 240 = float offset 60
-    data[60] = eyePos[0];
-    data[61] = eyePos[1];
-    data[62] = eyePos[2];
+    // eye_pos: vec3f at byte 288 = float offset 72
+    data[72] = eyePos[0];
+    data[73] = eyePos[1];
+    data[74] = eyePos[2];
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, data);
   }

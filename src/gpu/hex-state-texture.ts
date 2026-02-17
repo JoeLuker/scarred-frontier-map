@@ -95,9 +95,9 @@ export class HexStateTexture {
       }
 
       // A = packed: terrain_id (high nibble) + sector boundary (bit 0)
-      // Use baseTerrain (always 0-7) so tile color comes from pre-mutation type.
-      // Planar visual effects in Layer 4 handle mutation appearance.
-      const terrainId = TERRAIN_TYPE_TO_ID[hex.baseTerrain] ?? 0;
+      // Use current terrain (includes planar mutations like Forest→Magma).
+      // IDs 0-7 are base types, 8-10 are mutation-only (Magma, Crystal, Floating).
+      const terrainId = TERRAIN_TYPE_TO_ID[hex.terrain] ?? 0;
       let sectorBoundary = 0;
       const sector = getSectorID(q, r, sectorSpacing);
       for (const [dq, dr] of NEIGHBORS) {
