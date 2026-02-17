@@ -1,5 +1,6 @@
 import { WorldGenConfig } from '../core/types';
 import { sampleTerrain } from '../core/terrain';
+import { TERRAIN, RENDER } from '../core/config';
 import { MESH_VERTEX_STRIDE } from './types';
 
 // Terrain type → integer ID (must match shader TERRAIN_* constants)
@@ -24,11 +25,40 @@ export interface MeshBuffers {
   readonly indexCount: number;
 }
 
+// --- Height displacement (mirrors vertex shader karst_height + uniforms) ---
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+function karstHeight(h: number): number {
+  const cliff = smoothstep(0.12, 0.28, h);
+  const peak = Math.pow(h, 0.65);
+  return cliff * peak;
+}
+
+function computeDisplacedY(
+  elevation: number,
+  terrainId: number,
+  seaLevel: number,
+  landRange: number,
+  heightScale: number,
+): number {
+  const isRiver = terrainId < 0.5 && elevation >= seaLevel;
+  if (!isRiver && elevation >= seaLevel && landRange > 0) {
+    const normElev = (elevation - seaLevel) / landRange;
+    return karstHeight(normElev) * heightScale;
+  }
+  return 0;
+}
+
 /**
  * Build a regular triangle-grid terrain mesh covering a circular world area.
  *
  * Vertices are placed on a regular grid with `spacing` distance apart.
  * Each vertex samples the continuous terrain field for elevation/moisture/terrainId.
+ * Smooth normals are computed from displaced height via central differences.
  * Vertices outside the world circle (gridRadius hexes × hexSize × sqrt(3)) are culled.
  * Triangle pairs fill each grid cell; degenerate triangles at the boundary are skipped.
  */
@@ -39,26 +69,35 @@ export function buildTerrainMesh(
   spacing: number,
 ): MeshBuffers {
   const SQRT3 = Math.sqrt(3);
-  // World circle radius in pixels: gridRadius hexes × inter-hex distance
   const worldRadius = gridRadius * hexSize * SQRT3;
-  const worldRadius2 = worldRadius * worldRadius;
-  // Small margin so edge vertices don't pop
   const cullRadius2 = (worldRadius + spacing * 2) * (worldRadius + spacing * 2);
 
-  // Grid dimensions: cover -worldRadius..+worldRadius in both axes
   const halfExtent = worldRadius + spacing * 2;
   const cols = Math.ceil(halfExtent * 2 / spacing) + 1;
   const rows = Math.ceil(halfExtent * 2 / spacing) + 1;
   const originX = -halfExtent;
   const originZ = -halfExtent;
 
-  // Allocate vertex buffer (worst case: all grid points)
-  const maxVerts = cols * rows;
-  const vertexData = new Float32Array(maxVerts * MESH_VERTEX_STRIDE);
+  // Derive height params from config (must match HexGrid.tsx renderGpu uniform logic)
+  const seaLevel = TERRAIN.SEA_LEVEL_MIN + config.waterLevel * TERRAIN.SEA_LEVEL_RANGE;
+  const landRange = 1 - seaLevel;
+  const heightScale = hexSize * RENDER.HEIGHT_SCALE * (0.2 + config.verticality * 1.8);
 
-  // Map grid (col, row) → vertex index (-1 if culled)
+  // --- Pass 1: Sample terrain, compute displaced Y, store per-grid-cell data ---
+  const maxVerts = cols * rows;
   const gridToVert = new Int32Array(maxVerts);
   gridToVert.fill(-1);
+
+  // Temporary arrays indexed by vertex index
+  const posX = new Float32Array(maxVerts);
+  const posZ = new Float32Array(maxVerts);
+  const displacedY = new Float32Array(maxVerts);
+  const elevations = new Float32Array(maxVerts);
+  const moistures = new Float32Array(maxVerts);
+  const terrainIds = new Float32Array(maxVerts);
+  // Grid col/row for each vertex (needed for neighbor lookup in pass 2)
+  const vertCol = new Int32Array(maxVerts);
+  const vertRow = new Int32Array(maxVerts);
 
   let vertCount = 0;
 
@@ -66,30 +105,71 @@ export function buildTerrainMesh(
     const z = originZ + row * spacing;
     for (let col = 0; col < cols; col++) {
       const x = originX + col * spacing;
-
-      // Circular cull
       if (x * x + z * z > cullRadius2) continue;
 
       const gridIdx = row * cols + col;
       gridToVert[gridIdx] = vertCount;
 
-      // Sample continuous terrain field at world-space pixel coordinates
-      // Note: sampleTerrain uses (x, y) where y maps to our z
       const sample = sampleTerrain(x, z, config);
+      const tid = TERRAIN_TYPE_IDS[sample.terrain] ?? 2;
 
-      const off = vertCount * MESH_VERTEX_STRIDE;
-      vertexData[off] = x;
-      vertexData[off + 1] = z;
-      vertexData[off + 2] = sample.elevation;
-      vertexData[off + 3] = sample.moisture;
-      vertexData[off + 4] = TERRAIN_TYPE_IDS[sample.terrain] ?? 2; // default to Plain
+      posX[vertCount] = x;
+      posZ[vertCount] = z;
+      elevations[vertCount] = sample.elevation;
+      moistures[vertCount] = sample.moisture;
+      terrainIds[vertCount] = tid;
+      displacedY[vertCount] = computeDisplacedY(sample.elevation, tid, seaLevel, landRange, heightScale);
+      vertCol[vertCount] = col;
+      vertRow[vertCount] = row;
 
       vertCount++;
     }
   }
 
-  // Build index buffer: two triangles per grid cell
-  // Max triangles = 2 per cell, 3 indices per triangle
+  // --- Pass 2: Compute smooth normals from displaced height central differences ---
+  const vertexData = new Float32Array(maxVerts * MESH_VERTEX_STRIDE);
+  const invSpacing2 = 1 / (2 * spacing);
+
+  for (let i = 0; i < vertCount; i++) {
+    const col = vertCol[i]!;
+    const row = vertRow[i]!;
+
+    // Look up neighbors in grid space
+    const leftIdx = col > 0 ? gridToVert[row * cols + (col - 1)]! : -1;
+    const rightIdx = col < cols - 1 ? gridToVert[row * cols + (col + 1)]! : -1;
+    const upIdx = row > 0 ? gridToVert[(row - 1) * cols + col]! : -1;
+    const downIdx = row < rows - 1 ? gridToVert[(row + 1) * cols + col]! : -1;
+
+    const y = displacedY[i]!;
+    const yLeft = leftIdx >= 0 ? displacedY[leftIdx]! : y;
+    const yRight = rightIdx >= 0 ? displacedY[rightIdx]! : y;
+    const yUp = upIdx >= 0 ? displacedY[upIdx]! : y;
+    const yDown = downIdx >= 0 ? displacedY[downIdx]! : y;
+
+    // Central difference gradient → normal
+    const dydx = (yRight - yLeft) * invSpacing2;
+    const dydz = (yDown - yUp) * invSpacing2;
+    // Normal = normalize(-dydx, 1, -dydz)
+    let nx = -dydx;
+    let ny = 1;
+    let nz = -dydz;
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    nx /= len;
+    ny /= len;
+    nz /= len;
+
+    const off = i * MESH_VERTEX_STRIDE;
+    vertexData[off] = posX[i]!;
+    vertexData[off + 1] = posZ[i]!;
+    vertexData[off + 2] = elevations[i]!;
+    vertexData[off + 3] = moistures[i]!;
+    vertexData[off + 4] = terrainIds[i]!;
+    vertexData[off + 5] = nx;
+    vertexData[off + 6] = ny;
+    vertexData[off + 7] = nz;
+  }
+
+  // --- Build index buffer ---
   const maxIndices = (cols - 1) * (rows - 1) * 6;
   const indexData = new Uint32Array(maxIndices);
   let idxCount = 0;
@@ -106,15 +186,12 @@ export function buildTerrainMesh(
       const v01 = gridToVert[g01]!;
       const v11 = gridToVert[g11]!;
 
-      // Skip cells with any culled vertex
       if (v00 < 0 || v10 < 0 || v01 < 0 || v11 < 0) continue;
 
-      // Triangle 1: v00, v01, v10
       indexData[idxCount++] = v00;
       indexData[idxCount++] = v01;
       indexData[idxCount++] = v10;
 
-      // Triangle 2: v10, v01, v11
       indexData[idxCount++] = v10;
       indexData[idxCount++] = v01;
       indexData[idxCount++] = v11;
@@ -150,7 +227,6 @@ export class TerrainMesh {
       size: initialVertexCapacity * MESH_VERTEX_STRIDE * 4,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    // Generous initial index capacity: ~2 triangles per vertex
     const indexBuffer = device.createBuffer({
       size: initialVertexCapacity * 6 * 4,
       usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
@@ -159,7 +235,6 @@ export class TerrainMesh {
   }
 
   upload(mesh: MeshBuffers): void {
-    // Resize vertex buffer if needed
     const vertexBytes = mesh.vertices.byteLength;
     if (vertexBytes > this._vertexBuffer.size) {
       this._vertexBuffer.destroy();
@@ -169,7 +244,6 @@ export class TerrainMesh {
       });
     }
 
-    // Resize index buffer if needed
     const indexBytes = mesh.indices.byteLength;
     if (indexBytes > this._indexBuffer.size) {
       this._indexBuffer.destroy();

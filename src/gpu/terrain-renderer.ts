@@ -42,6 +42,7 @@ struct VertexIn {
   @location(1) elevation: f32,
   @location(2) moisture: f32,
   @location(3) terrain_id: f32,
+  @location(4) normal: vec3f,
 }
 
 struct VertexOut {
@@ -50,6 +51,7 @@ struct VertexOut {
   @location(1) elevation: f32,
   @location(2) moisture: f32,
   @location(3) terrain_id: f32,
+  @location(4) smooth_normal: vec3f,
 }
 
 // Karst terrain profile: flat valleys, steep cliff walls, tower peaks
@@ -80,6 +82,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
   out.elevation = in.elevation;
   out.moisture = in.moisture;
   out.terrain_id = in.terrain_id;
+  out.smooth_normal = in.normal;
   return out;
 }
 
@@ -204,7 +207,7 @@ const SUN_DIR: vec3f = vec3f(0.4, 0.55, 0.5);  // lower sun = longer shadows
 const SUN_COLOR: vec3f = vec3f(1.0, 0.95, 0.85);  // warm sunlight
 const SKY_COLOR: vec3f = vec3f(0.55, 0.65, 0.85);  // cool ambient
 const ROCK_COLOR: vec3f = vec3f(0.42, 0.38, 0.35);  // exposed cliff rock
-const FOG_DENSITY: f32 = 0.00012;
+const FOG_DENSITY: f32 = 0.00003;
 const FOG_COLOR: vec3f = vec3f(0.6, 0.68, 0.82);
 
 // ============================================================
@@ -279,6 +282,19 @@ fn biome_color(elevation: f32, moisture: f32, terrain_id: f32, world_xz: vec2f) 
 }
 
 // ============================================================
+// ACES filmic tone mapping
+// ============================================================
+
+fn aces_tonemap(x: vec3f) -> vec3f {
+  let a = 2.51;
+  let b = 0.03;
+  let c = 2.43;
+  let d = 0.59;
+  let e = 0.14;
+  return saturate((x * (a * x + vec3f(b))) / (x * (c * x + vec3f(d)) + vec3f(e)));
+}
+
+// ============================================================
 // Main fragment shader
 // ============================================================
 
@@ -288,13 +304,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let sea = u.sea_level;
   let is_water = in.terrain_id < 0.5 || in.elevation < sea;
 
-  // --- Surface normal via screen-space derivatives ---
-  let ddx_pos = dpdx(in.world_pos);
-  let ddy_pos = dpdy(in.world_pos);
-  let normal = normalize(cross(ddx_pos, ddy_pos));
+  // --- Smooth pre-computed normal (from vertex data) ---
+  let normal = normalize(in.smooth_normal);
   let slope = 1.0 - abs(normal.y);
 
-  // --- Curvature approximation (stronger sensitivity) ---
+  // --- View direction (shared by water, rim light, roughness) ---
+  let view_dir = normalize(u.eye_pos - in.world_pos);
+
+  // --- Curvature approximation (from elevation screen-space derivatives) ---
   let ddx_e = dpdx(in.elevation);
   let ddy_e = dpdy(in.elevation);
   let curvature = clamp((dpdx(ddx_e) + dpdy(ddy_e)) * 200.0, -1.0, 1.0);
@@ -302,20 +319,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   // --- Base biome color ---
   var color = biome_color(in.elevation, in.moisture, in.terrain_id, in.world_pos.xz);
 
-  // --- Water specular + Fresnel (needs normal, sun_dir, eye_pos) ---
+  // --- Water specular + Fresnel ---
   if (is_water) {
-    let view_dir = normalize(u.eye_pos - in.world_pos);
-    // Perturb water normal with noise for ripple effect
     let wn1 = (value_noise(in.world_pos.xz * 0.03) - 0.5) * 0.3;
     let wn2 = (value_noise(in.world_pos.xz * 0.07 + vec2f(50.0, 80.0)) - 0.5) * 0.15;
     let water_normal = normalize(vec3f(wn1, 1.0, wn2));
 
-    // Sun glint: tight specular highlight
     let reflect_dir = reflect(-sun_dir, water_normal);
     let spec = pow(max(dot(reflect_dir, view_dir), 0.0), 64.0);
     color += SUN_COLOR * spec * 0.6;
 
-    // Fresnel sky reflection: stronger at grazing angles
     let NdotV = max(dot(water_normal, view_dir), 0.0);
     let fresnel = pow(1.0 - NdotV, 3.0) * 0.4;
     color = mix(color, SKY_COLOR * 0.8, fresnel);
@@ -329,7 +342,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     let rock_blend = smoothstep(0.2, 0.55, slope);
     color = mix(color, textured_rock, rock_blend * 0.85);
 
-    // --- Curvature accent: stronger ridges/valleys ---
+    // --- Curvature accent ---
     let ridge_light = max(0.0, curvature) * 0.35;
     let valley_dark = max(0.0, -curvature) * 0.4;
     color *= (1.0 + ridge_light - valley_dark);
@@ -342,7 +355,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     let altitude_desat = smoothstep(0.4, 0.85, norm_elev) * 0.35;
     color = mix(color, vec3f(gray) * vec3f(0.92, 0.94, 1.0), altitude_desat);
 
-    // Snow with fine + coarse noise for sparkle/variation
     let snow_line = 0.72;
     let snow_base = smoothstep(snow_line, 0.92, norm_elev);
     let snow_slip = 1.0 - smoothstep(0.3, 0.6, slope);
@@ -351,16 +363,30 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     let snow_t = clamp(snow_base * snow_slip + snow_fine * snow_base + snow_coarse * snow_base, 0.0, 1.0);
     let snow_color = vec3f(0.90, 0.93, 0.97) + vec3f(snow_fine * 0.08);
     color = mix(color, snow_color, snow_t);
+
+    // --- Material roughness: wet lowlands get specular, dry highlands are matte ---
+    let roughness = mix(0.3, 0.95, smoothstep(0.0, 0.5, norm_elev));
+    let half_vec = normalize(sun_dir + view_dir);
+    let NdotH = max(dot(normal, half_vec), 0.0);
+    let spec_power = mix(32.0, 4.0, roughness);
+    let land_spec = pow(NdotH, spec_power) * (1.0 - roughness) * 0.25;
+    color += SUN_COLOR * land_spec;
   }
 
   // --- Directional lighting (Wrapped Lambert) ---
   let NdotL = dot(normal, sun_dir);
   let wrapped = saturate((NdotL + 0.15) / 1.15);
   let light = mix(SKY_COLOR * 0.35, SUN_COLOR, wrapped);
-  // Water gets subtler lighting; land gets full effect
   let is_water_f = select(0.0, 1.0, is_water);
   let light_strength = mix(1.0, 0.5, is_water_f);
   color *= mix(vec3f(0.65), light, light_strength);
+
+  // --- Rim / backlight on ridgelines ---
+  if (!is_water) {
+    let rim = pow(1.0 - max(dot(normal, view_dir), 0.0), 4.0);
+    let rim_sun = max(dot(-view_dir, sun_dir), 0.0);
+    color += rim * rim_sun * SUN_COLOR * 0.15;
+  }
 
   // --- Hex grid overlay (SDF) ---
   let edge_dist = hex_edge_distance(in.world_pos.x, in.world_pos.z, u.hex_size);
@@ -378,17 +404,30 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     color = mix(color, tint_color, 0.3);
   }
 
-  // Fog-of-war: desaturation + darken instead of white tint
+  // Fog-of-war: desaturation + darken
   if (explored < 0.5) {
     let lum = dot(color, vec3f(0.299, 0.587, 0.114));
     let fog_grey = vec3f(lum) * 0.4;
     color = mix(color, fog_grey, u.fog_mix);
   }
 
-  // --- Atmospheric distance fog ---
+  // --- Atmospheric scattering (replaces flat fog) ---
   let view_dist = length(in.world_pos - u.eye_pos);
+  let view_to_frag = normalize(in.world_pos - u.eye_pos);
   let fog_amount = 1.0 - exp(-view_dist * FOG_DENSITY);
-  color = mix(color, FOG_COLOR, fog_amount);
+
+  // Mie-like forward scattering (bright halo toward sun)
+  let sun_alignment = max(dot(view_to_frag, sun_dir), 0.0);
+  let mie = pow(sun_alignment, 8.0) * 0.3;
+
+  // Rayleigh: blue at distance, warm near sun direction
+  let rayleigh_color = mix(
+    vec3f(0.35, 0.45, 0.7),
+    vec3f(0.7, 0.6, 0.45),
+    sun_alignment * sun_alignment
+  );
+  let scatter_color = mix(rayleigh_color, SUN_COLOR, mie);
+  color = mix(color, scatter_color, fog_amount);
 
   // --- World edge fade ---
   let world_dist2 = in.world_pos.x * in.world_pos.x + in.world_pos.z * in.world_pos.z;
@@ -396,9 +435,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let edge_fade = smoothstep(world_radius * world_radius, (world_radius - 200.0) * (world_radius - 200.0), world_dist2);
   color *= edge_fade;
 
-  // --- Soft HDR clamp (Reinhard tone mapping, adjusted rescale) ---
-  color = color / (color + vec3f(1.0));
-  color *= 1.6;
+  // --- ACES filmic tone mapping ---
+  color = aces_tonemap(color * 0.95);
 
   return vec4f(clamp(color, vec3f(0.0), vec3f(1.0)), 1.0);
 }
@@ -486,6 +524,7 @@ export class TerrainRenderer {
             { shaderLocation: 1, offset: 8, format: 'float32' },     // elevation
             { shaderLocation: 2, offset: 12, format: 'float32' },    // moisture
             { shaderLocation: 3, offset: 16, format: 'float32' },    // terrain_id
+            { shaderLocation: 4, offset: 20, format: 'float32x3' },  // normal
           ],
         }],
       },

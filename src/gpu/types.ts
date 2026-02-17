@@ -63,6 +63,6 @@ export interface GpuContext {
 }
 
 // --- Mesh vertex data layout for terrain rendering ---
-// Each vertex: posX(1) + posZ(1) + elevation(1) + moisture(1) + terrainId(1) = 5 floats = 20 bytes
-export const MESH_VERTEX_STRIDE = 5;
+// Each vertex: posX(1) + posZ(1) + elevation(1) + moisture(1) + terrainId(1) + normalXYZ(3) = 8 floats = 32 bytes
+export const MESH_VERTEX_STRIDE = 8;
 export const MESH_VERTEX_BYTE_STRIDE = MESH_VERTEX_STRIDE * 4;
