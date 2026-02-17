@@ -1,5 +1,6 @@
 import { HexData, WorldGenConfig, PlanarAlignment } from './types';
 import { WORLD } from './config';
+import { getSectorID } from './geometry';
 import { getBiomeAt } from './biome';
 
 // --- Public API ---
@@ -17,11 +18,11 @@ export const generateWorld = (config: WorldGenConfig): HexData[] => {
     for (let r = r1; r <= r2; r++) {
       const dist = (Math.abs(q) + Math.abs(q + r) + Math.abs(r)) / 2;
       const { terrain, element, flavor, elevation } = getBiomeAt(q, r, config);
-      const ringGroup = Math.floor(dist / ringWidth);
+      const sector = getSectorID(q, r, ringWidth);
 
       hexes.push({
         id: `HEX-${q}_${r}`,
-        groupId: `RING-${ringGroup}`,
+        groupId: `SECTOR-${sector.q}_${sector.r}`,
         terrain,
         element,
         elevation,

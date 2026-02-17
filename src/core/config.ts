@@ -78,6 +78,42 @@ export const TERRAIN = {
   // Domain warp (chaos parameter)
   DOMAIN_WARP_SCALE: 0.0003,
   DOMAIN_WARP_MAX: 300.0,
+  WARP_COORD_OFFSET: 7.0,           // Decorrelation offset for second warp sample
+
+  // Continent frequency: contFreq = CONTINENTAL_SCALE * (CONT_FREQ_BASE + continentScale * CONT_FREQ_RANGE)
+  CONT_FREQ_BASE: 0.25,
+  CONT_FREQ_RANGE: 1.5,
+
+  // Ridge exponent: ridgeExp = RIDGE_EXP_BASE + ridgeSharpness * RIDGE_EXP_RANGE
+  RIDGE_EXP_BASE: 0.3,
+  RIDGE_EXP_RANGE: 1.4,
+
+  // Erosion suppression: effWeight = weight * (1 - erosion * factor)
+  EROSION_RIDGE_FACTOR: 0.5,
+  EROSION_DETAIL_FACTOR: 0.9,
+
+  // Coast complexity
+  COAST_AMPLITUDE: 0.1,
+  COAST_MIN_SEA_LEVEL: 0.01,
+
+  // Plateau quantization: bands = PLATEAU_BANDS_MIN + (1 - plateauFactor) * PLATEAU_BANDS_RANGE
+  PLATEAU_BANDS_MIN: 3,
+  PLATEAU_BANDS_RANGE: 20,
+
+  // Valley depth shape: pow(t, VALLEY_EXP_BASE + valleyDepth)
+  VALLEY_EXP_BASE: 0.5,
+
+  // Temperature-driven biome threshold shifts
+  TEMP_DESERT_SHIFT: 0.3,
+  TEMP_FOREST_SHIFT: 0.2,
+
+  // Flavor sub-thresholds (relative position within biome range)
+  DEEP_OCEAN_RATIO: 0.5,
+  SNOW_MOISTURE: 0.5,
+
+  // River warp sub-frequency and decorrelation offset
+  RIVER_WARP_FREQ: 0.5,
+  RIVER_WARP_OFFSET: 5.0,
 } as const;
 
 // --- Per-Hex Biome Constants (use hash(q, r, seed)) ---
@@ -118,14 +154,13 @@ export const NOISE = {
   EDGE_OFFSET: -1.5,
   INTENSITY_EPSILON: 0.1,
   INTENSITY_THRESHOLD: 0.1,
-  HASH_DIVISOR: 4294967296,
   EDGE_SEED: 12345,
 } as const;
 
 // --- Continuous Terrain Mesh ---
 
 export const MESH = {
-  VERTEX_SPACING: 25,         // Distance between mesh vertices (HEX_SIZE / 2)
+  VERTEX_SPACING: WORLD.HEX_SIZE / 2,  // Derived from HEX_SIZE — half a hex width
   HEX_GRID_OPACITY: 0.15,    // Opacity of hex grid overlay lines
   FOG_MIX: 0.35,             // Desaturation + darken for unexplored fog overlay
 } as const;

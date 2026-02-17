@@ -14,14 +14,13 @@ const PLANE_TYPE_ID: Record<string, number> = {
   [PlanarAlignment.SCAR]:      7,
 };
 
-// Pre-computed encoded byte values: round(id * 255 / 7)
-// Shader decodes: plane_type = u32(round(hex_state.g * 7.0))
-const PLANE_TYPE_ENCODED: readonly number[] = [0, 36, 73, 109, 146, 182, 218, 255];
+// Plane type stored as direct byte value (0-7).
+// Shader decodes: plane_type = u32(round(hex_state.g * 255.0))
 
 /**
  * GPU texture encoding per-hex game state:
  *   R = explored (255 = explored, 0 = fog)
- *   G = plane type (0-7 encoded as 0-255, decoded via round(g * 7))
+ *   G = plane type (0-7 stored as direct byte, decoded via round(g * 255))
  *   B = planar intensity (0.0-1.0 → 0-255)
  *   A = sector boundary (255 if any neighbor belongs to a different sector, 0 otherwise)
  *
@@ -89,7 +88,7 @@ export class HexStateTexture {
       // G = plane type, B = intensity (encode for ALL planar influences)
       if (hex.planarInfluences.length > 0) {
         const planeId = PLANE_TYPE_ID[hex.planarAlignment] ?? 0;
-        data[off + 1] = PLANE_TYPE_ENCODED[planeId] ?? 0;
+        data[off + 1] = planeId;
         data[off + 2] = Math.min(255, Math.round(hex.planarIntensity * 255));
       }
 

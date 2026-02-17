@@ -1,5 +1,5 @@
 import { TerrainType, TerrainElement, WorldGenConfig } from './types';
-import { hash } from './noise';
+import { hashNorm } from './noise';
 import { hexToPixel } from './geometry';
 import { WORLD, BIOME } from './config';
 import { sampleTerrain } from './terrain';
@@ -24,7 +24,7 @@ const calculateSettlementScore = (
   if (terrain === TerrainType.PLAIN) score += BIOME.SETTLEMENT_PLAIN_BONUS;
   if (terrain === TerrainType.HILL) score += BIOME.SETTLEMENT_HILL_BONUS;
   if (terrain === TerrainType.DESERT) score -= BIOME.SETTLEMENT_DESERT_PENALTY;
-  const chaos = (hash(q, r, seed + BIOME.HASH_SETTLEMENT_CHAOS) % 100) / 100;
+  const chaos = hashNorm(q, r, seed + BIOME.HASH_SETTLEMENT_CHAOS);
   score += chaos * BIOME.SETTLEMENT_CHAOS_WEIGHT;
   return score;
 };
@@ -37,7 +37,7 @@ const calculateElement = (
   r: number,
   seed: number,
 ): TerrainElement => {
-  const val = (hash(q, r, seed + BIOME.HASH_ELEMENT) % 1000) / 1000;
+  const val = hashNorm(q, r, seed + BIOME.HASH_ELEMENT);
 
   if (terrain === TerrainType.MOUNTAIN) {
     if (val > BIOME.MOUNTAIN_SECRET) return TerrainElement.SECRET;
@@ -72,7 +72,7 @@ export const getBiomeAt = (
   const element = calculateElement(terrain, elevation, moisture, q, r, config.seed);
 
   // Layer 2: per-hex settlement (uses hash(q, r, seed))
-  const settlementRoll = (hash(q, r, config.seed + BIOME.HASH_SETTLEMENT_ROLL) % 100) / 100;
+  const settlementRoll = hashNorm(q, r, config.seed + BIOME.HASH_SETTLEMENT_ROLL);
 
   if (element === TerrainElement.FEATURE && settlementRoll > BIOME.SETTLEMENT_ROLL_THRESHOLD) {
     const settlementScore = calculateSettlementScore(terrain, elevation, moisture, q, r, config.seed);

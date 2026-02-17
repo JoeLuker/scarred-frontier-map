@@ -32,7 +32,7 @@ export const sampleTerrain = (
   if (chaos > 0) {
     const warpAmount = chaos * TERRAIN.DOMAIN_WARP_MAX;
     const wx = fbm(x * TERRAIN.DOMAIN_WARP_SCALE, y * TERRAIN.DOMAIN_WARP_SCALE, seed + 900, 3);
-    const wy = fbm(x * TERRAIN.DOMAIN_WARP_SCALE + 7.0, y * TERRAIN.DOMAIN_WARP_SCALE + 7.0, seed + 900, 3);
+    const wy = fbm(x * TERRAIN.DOMAIN_WARP_SCALE + TERRAIN.WARP_COORD_OFFSET, y * TERRAIN.DOMAIN_WARP_SCALE + TERRAIN.WARP_COORD_OFFSET, seed + 900, 3);
     sx = x + (wx - 0.5) * warpAmount;
     sy = y + (wy - 0.5) * warpAmount;
   }
@@ -40,20 +40,20 @@ export const sampleTerrain = (
   // --- 1. LAYERED ELEVATION ---
 
   // Continental: scale modulated by continentScale slider
-  const contFreq = TERRAIN.CONTINENTAL_SCALE * (0.25 + continentScale * 1.5);
+  const contFreq = TERRAIN.CONTINENTAL_SCALE * (TERRAIN.CONT_FREQ_BASE + continentScale * TERRAIN.CONT_FREQ_RANGE);
   const continental = fbm(sx * contFreq, sy * contFreq, seed, 4);
 
   // Ridge: mid-frequency ridged noise with sharpness control
   const ridgeRaw = fbm(sx * TERRAIN.RIDGE_SCALE, sy * TERRAIN.RIDGE_SCALE, seed + 200, 3);
-  const ridgeExp = 0.3 + ridgeSharpness * 1.4;
+  const ridgeExp = TERRAIN.RIDGE_EXP_BASE + ridgeSharpness * TERRAIN.RIDGE_EXP_RANGE;
   const ridge = Math.pow(1 - Math.abs(2 * ridgeRaw - 1), ridgeExp);
 
   // Detail: high-frequency local variation
   const detail = fbm(sx * TERRAIN.DETAIL_SCALE, sy * TERRAIN.DETAIL_SCALE, seed + 400, 2);
 
   // Erosion: suppress ridge and detail weights
-  const effRidgeWeight = TERRAIN.RIDGE_WEIGHT * (1 - erosion * 0.5);
-  const effDetailWeight = TERRAIN.DETAIL_WEIGHT * (1 - erosion * 0.9);
+  const effRidgeWeight = TERRAIN.RIDGE_WEIGHT * (1 - erosion * TERRAIN.EROSION_RIDGE_FACTOR);
+  const effDetailWeight = TERRAIN.DETAIL_WEIGHT * (1 - erosion * TERRAIN.EROSION_DETAIL_FACTOR);
 
   // Composite elevation
   let elevation = Math.max(0, Math.min(1,
@@ -71,12 +71,12 @@ export const sampleTerrain = (
   let seaLevel = baseSeaLevel;
   if (coastComplexity > 0) {
     const coastNoise = fbm(sx * TERRAIN.COAST_NOISE_SCALE, sy * TERRAIN.COAST_NOISE_SCALE, seed + 1100, 2) - 0.5;
-    seaLevel = Math.max(0.01, baseSeaLevel + coastNoise * coastComplexity * 0.1);
+    seaLevel = Math.max(TERRAIN.COAST_MIN_SEA_LEVEL, baseSeaLevel + coastNoise * coastComplexity * TERRAIN.COAST_AMPLITUDE);
   }
 
   // --- 2c. PLATEAU QUANTIZATION ---
   if (plateauFactor > 0) {
-    const bands = 3 + (1 - plateauFactor) * 20;
+    const bands = TERRAIN.PLATEAU_BANDS_MIN + (1 - plateauFactor) * TERRAIN.PLATEAU_BANDS_RANGE;
     const quantized = Math.round(elevation * bands) / bands;
     const blend = plateauFactor * plateauFactor;
     elevation = elevation * (1 - blend) + quantized * blend;
@@ -87,7 +87,7 @@ export const sampleTerrain = (
     const range = (seaLevel + mountainThreshold) * 0.5 - seaLevel;
     if (range > 0) {
       const t = (elevation - seaLevel) / range;
-      const shaped = Math.pow(t, 0.5 + valleyDepth);
+      const shaped = Math.pow(t, TERRAIN.VALLEY_EXP_BASE + valleyDepth);
       elevation = seaLevel + shaped * range;
     }
   }
@@ -110,8 +110,8 @@ export const sampleTerrain = (
   // --- 4. RIVERS (domain-warped valley detection) ---
   const rwx = sx * TERRAIN.RIVER_SCALE;
   const rwy = sy * TERRAIN.RIVER_SCALE;
-  const warpX = fbm(rwx * 0.5, rwy * 0.5, seed + 800, 2) * TERRAIN.RIVER_WARP_AMOUNT;
-  const warpY = fbm(rwx * 0.5 + 5.0, rwy * 0.5 + 5.0, seed + 800, 2) * TERRAIN.RIVER_WARP_AMOUNT;
+  const warpX = fbm(rwx * TERRAIN.RIVER_WARP_FREQ, rwy * TERRAIN.RIVER_WARP_FREQ, seed + 800, 2) * TERRAIN.RIVER_WARP_AMOUNT;
+  const warpY = fbm(rwx * TERRAIN.RIVER_WARP_FREQ + TERRAIN.RIVER_WARP_OFFSET, rwy * TERRAIN.RIVER_WARP_FREQ + TERRAIN.RIVER_WARP_OFFSET, seed + 800, 2) * TERRAIN.RIVER_WARP_AMOUNT;
   const riverNoise = fbm(rwx + warpX, rwy + warpY, seed + 700, 2);
   const riverValley = Math.abs(riverNoise - 0.5) * 2;
   const isRiver = !forceNoRiver
@@ -121,19 +121,19 @@ export const sampleTerrain = (
 
   // --- 5. BIOME SELECTION (elevation × moisture) with temperature shift ---
   const tempShift = temperature - 0.5;
-  const desertThreshold = TERRAIN.MOISTURE_DESERT + tempShift * 0.3;
-  const forestThreshold = TERRAIN.MOISTURE_FOREST + tempShift * 0.2;
-  const marshThreshold = TERRAIN.MOISTURE_MARSH - tempShift * 0.2;
+  const desertThreshold = TERRAIN.MOISTURE_DESERT + tempShift * TERRAIN.TEMP_DESERT_SHIFT;
+  const forestThreshold = TERRAIN.MOISTURE_FOREST + tempShift * TERRAIN.TEMP_FOREST_SHIFT;
+  const marshThreshold = TERRAIN.MOISTURE_MARSH - tempShift * TERRAIN.TEMP_FOREST_SHIFT;
 
   let terrain: TerrainType = TerrainType.PLAIN;
   let flavor = 'Wilderness';
 
   if (elevation < seaLevel) {
     terrain = TerrainType.WATER;
-    flavor = elevation < seaLevel * 0.5 ? 'Deep Ocean' : 'Shallow Sea';
+    flavor = elevation < seaLevel * TERRAIN.DEEP_OCEAN_RATIO ? 'Deep Ocean' : 'Shallow Sea';
   } else if (elevation > mountainThreshold) {
     terrain = TerrainType.MOUNTAIN;
-    flavor = moisture > 0.5 ? 'Snow-Capped Peak' : 'Bare Peak';
+    flavor = moisture > TERRAIN.SNOW_MOISTURE ? 'Snow-Capped Peak' : 'Bare Peak';
   } else if (isRiver) {
     terrain = TerrainType.WATER;
     flavor = 'River';

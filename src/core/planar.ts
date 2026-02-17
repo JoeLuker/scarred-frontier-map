@@ -1,7 +1,7 @@
 import { PlanarAlignment, TerrainType, HexData, PlanarOverlay, PlanarInfluence } from './types';
 import { PLANAR_MUTATIONS, NOISE } from './config';
 import { getHexDistance } from './geometry';
-import { hash } from './noise';
+import { hashNorm } from './noise';
 
 const getGenericFlavorPrefix = (plane: PlanarAlignment, isPrimary: boolean): string => {
   switch (plane) {
@@ -98,7 +98,7 @@ export const computeHexState = (hex: HexData, overlays: readonly PlanarOverlay[]
     const dist = getHexDistance(hex.coordinates, overlay.coordinates);
 
     // Organic edge: noise-based radius variation
-    const noiseVal = hash(hex.coordinates.q, hex.coordinates.r, NOISE.EDGE_SEED) / NOISE.HASH_DIVISOR;
+    const noiseVal = hashNorm(hex.coordinates.q, hex.coordinates.r, NOISE.EDGE_SEED);
     const noiseOffset = noiseVal * NOISE.EDGE_VARIATION + NOISE.EDGE_OFFSET;
 
     const effectiveRadius = overlay.radius + noiseOffset;

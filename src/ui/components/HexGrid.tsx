@@ -13,27 +13,18 @@ import {
   HexStateTexture,
   worldToScreen,
   getEyePosition,
+  TERRAIN_ORDER,
 } from '../../gpu';
 
 // ===================================================================
 // Pre-computed terrain color array for GPU uniform upload (8 × RGBA)
+// Uses TERRAIN_ORDER from gpu/types.ts (single source of truth for ID→type mapping)
 // ===================================================================
-
-const TERRAIN_COLOR_ORDER: readonly TerrainType[] = [
-  TerrainType.WATER,
-  TerrainType.DESERT,
-  TerrainType.PLAIN,
-  TerrainType.FOREST,
-  TerrainType.MARSH,
-  TerrainType.HILL,
-  TerrainType.MOUNTAIN,
-  TerrainType.SETTLEMENT,
-];
 
 function buildTerrainColorArray(): Float32Array {
   const colors = new Float32Array(32); // 8 × 4 (rgba)
-  for (let i = 0; i < TERRAIN_COLOR_ORDER.length; i++) {
-    const hex = TERRAIN_COLORS[TERRAIN_COLOR_ORDER[i]!];
+  for (let i = 0; i < 8; i++) {
+    const hex = TERRAIN_COLORS[TERRAIN_ORDER[i]!];
     const { r, g, b } = hexToRgb(hex);
     colors[i * 4] = r / 255;
     colors[i * 4 + 1] = g / 255;

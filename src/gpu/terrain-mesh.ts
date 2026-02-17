@@ -2,22 +2,7 @@ import { WorldGenConfig } from '../core/types';
 import { sampleTerrain } from '../core/terrain';
 import { pixelToHex, hexToPixel } from '../core/geometry';
 import { TERRAIN, RENDER } from '../core/config';
-import { MESH_VERTEX_STRIDE } from './types';
-
-// Terrain type → integer ID (must match shader TERRAIN_* constants)
-const TERRAIN_TYPE_IDS: Record<string, number> = {
-  Water: 0,
-  Desert: 1,
-  Plain: 2,
-  Forest: 3,
-  Marsh: 4,
-  Hill: 5,
-  Mountain: 6,
-  Settlement: 7,
-  'Magma Fields': 8,
-  'Crystal Spires': 9,
-  'Floating Islands': 10,
-};
+import { MESH_VERTEX_STRIDE, TERRAIN_TYPE_TO_ID } from './types';
 
 export interface MeshBuffers {
   readonly vertices: Float32Array;
@@ -26,7 +11,10 @@ export interface MeshBuffers {
   readonly indexCount: number;
 }
 
-// --- Height displacement (mirrors vertex shader karst_height + uniforms) ---
+// --- Height displacement ---
+// PARALLEL IMPLEMENTATION: Must match terrain-renderer.ts WGSL karst_height().
+// Both use smoothstep(0.12, 0.28, h) * pow(h, 0.65). Any change here must
+// be mirrored in the vertex shader, otherwise CPU mesh normals diverge from GPU height.
 
 function smoothstep(edge0: number, edge1: number, x: number): number {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
@@ -125,7 +113,7 @@ export function buildTerrainMesh(
       if (tid === undefined) {
         const center = hexToPixel(hexCoord.q, hexCoord.r, hexSize);
         const centerSample = sampleTerrain(center.x, center.y, config);
-        tid = TERRAIN_TYPE_IDS[centerSample.terrain] ?? 2;
+        tid = TERRAIN_TYPE_TO_ID[centerSample.terrain] ?? 2;
         hexCenterTerrainCache.set(hexKey, tid);
       }
 

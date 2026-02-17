@@ -17,8 +17,13 @@ function createTerrainShader(): string {
   return /* wgsl */ `
 // ============================================================
 // Terrain Compute Shader — mirrors src/core/terrain.ts + biome.ts
+// PARALLEL IMPLEMENTATION: This WGSL code replicates the CPU terrain pipeline
+// for GPU-accelerated preview. Both must produce identical output for the same
+// inputs. The authoritative logic lives in core/terrain.ts and core/biome.ts;
+// this shader is a manual port. Changes to terrain generation MUST be applied
+// to both CPU and GPU paths.
 // Constants baked from src/core/config.ts at init time.
-// Samples noise in world-space (pixel) coordinates via hex_to_pixel.
+// Terrain type IDs must match gpu/types.ts TERRAIN_ORDER (single source of truth).
 // ============================================================
 
 // --- Terrain field constants (from config.ts TERRAIN object, world-space) ---
@@ -48,6 +53,24 @@ const MOISTURE_FOREST: f32 = ${TERRAIN.MOISTURE_FOREST};
 const COAST_NOISE_SCALE: f32 = ${TERRAIN.COAST_NOISE_SCALE};
 const DOMAIN_WARP_SCALE: f32 = ${TERRAIN.DOMAIN_WARP_SCALE};
 const DOMAIN_WARP_MAX: f32 = ${TERRAIN.DOMAIN_WARP_MAX};
+const WARP_COORD_OFFSET: f32 = ${TERRAIN.WARP_COORD_OFFSET};
+const CONT_FREQ_BASE: f32 = ${TERRAIN.CONT_FREQ_BASE};
+const CONT_FREQ_RANGE: f32 = ${TERRAIN.CONT_FREQ_RANGE};
+const RIDGE_EXP_BASE: f32 = ${TERRAIN.RIDGE_EXP_BASE};
+const RIDGE_EXP_RANGE: f32 = ${TERRAIN.RIDGE_EXP_RANGE};
+const EROSION_RIDGE_FACTOR: f32 = ${TERRAIN.EROSION_RIDGE_FACTOR};
+const EROSION_DETAIL_FACTOR: f32 = ${TERRAIN.EROSION_DETAIL_FACTOR};
+const COAST_AMPLITUDE: f32 = ${TERRAIN.COAST_AMPLITUDE};
+const COAST_MIN_SEA_LEVEL: f32 = ${TERRAIN.COAST_MIN_SEA_LEVEL};
+const PLATEAU_BANDS_MIN: f32 = ${TERRAIN.PLATEAU_BANDS_MIN};
+const PLATEAU_BANDS_RANGE: f32 = ${TERRAIN.PLATEAU_BANDS_RANGE};
+const VALLEY_EXP_BASE: f32 = ${TERRAIN.VALLEY_EXP_BASE};
+const TEMP_DESERT_SHIFT: f32 = ${TERRAIN.TEMP_DESERT_SHIFT};
+const TEMP_FOREST_SHIFT: f32 = ${TERRAIN.TEMP_FOREST_SHIFT};
+const DEEP_OCEAN_RATIO: f32 = ${TERRAIN.DEEP_OCEAN_RATIO};
+const SNOW_MOISTURE: f32 = ${TERRAIN.SNOW_MOISTURE};
+const RIVER_WARP_FREQ: f32 = ${TERRAIN.RIVER_WARP_FREQ};
+const RIVER_WARP_OFFSET: f32 = ${TERRAIN.RIVER_WARP_OFFSET};
 
 // --- Per-hex constants (from config.ts BIOME object) ---
 const SETTLEMENT_BASE_SCORE: f32 = ${BIOME.SETTLEMENT_BASE_SCORE};
@@ -147,7 +170,7 @@ struct HexResult {
 fn hex_to_pixel(q: i32, r: i32, hex_size: f32) -> vec2f {
   let qf = f32(q);
   let rf = f32(r);
-  return vec2f(hex_size * 1.7320508 * (qf + rf * 0.5), hex_size * 1.5 * rf);
+  return vec2f(hex_size * 1.7320508075688772 * (qf + rf * 0.5), hex_size * 1.5 * rf);
 }
 
 // ============================================================
@@ -166,10 +189,11 @@ fn smooth_noise(x: f32, y: f32, seed: i32) -> f32 {
   let ix = i32(fx);
   let iy = i32(fy);
 
-  let bl = f32(hash(ix, iy, seed) % 1000u) / 1000.0;
-  let br = f32(hash(ix + 1i, iy, seed) % 1000u) / 1000.0;
-  let tl = f32(hash(ix, iy + 1i, seed) % 1000u) / 1000.0;
-  let tr = f32(hash(ix + 1i, iy + 1i, seed) % 1000u) / 1000.0;
+  // Full 32-bit range normalization (mirrors core/noise.ts hashNorm)
+  let bl = f32(hash(ix, iy, seed)) / 4294967296.0;
+  let br = f32(hash(ix + 1i, iy, seed)) / 4294967296.0;
+  let tl = f32(hash(ix, iy + 1i, seed)) / 4294967296.0;
+  let tr = f32(hash(ix + 1i, iy + 1i, seed)) / 4294967296.0;
 
   let tx = x - fx;
   let ty = y - fy;
@@ -181,24 +205,27 @@ fn smooth_noise(x: f32, y: f32, seed: i32) -> f32 {
   return b + wy * (t - b);
 }
 
+// Per-octave seed stride for FBM decorrelation (must match core/noise.ts FBM_SEED_STRIDE)
+const FBM_SEED_STRIDE: i32 = 31;
+
 fn fbm2(x: f32, y: f32, seed: i32) -> f32 {
   let o0 = smooth_noise(x, y, seed);
-  let o1 = smooth_noise(x * 2.0, y * 2.0, seed) * 0.5;
+  let o1 = smooth_noise(x * 2.0, y * 2.0, seed + FBM_SEED_STRIDE) * 0.5;
   return (o0 + o1) / 1.5;
 }
 
 fn fbm3(x: f32, y: f32, seed: i32) -> f32 {
   let o0 = smooth_noise(x, y, seed);
-  let o1 = smooth_noise(x * 2.0, y * 2.0, seed) * 0.5;
-  let o2 = smooth_noise(x * 4.0, y * 4.0, seed) * 0.25;
+  let o1 = smooth_noise(x * 2.0, y * 2.0, seed + FBM_SEED_STRIDE) * 0.5;
+  let o2 = smooth_noise(x * 4.0, y * 4.0, seed + FBM_SEED_STRIDE * 2) * 0.25;
   return (o0 + o1 + o2) / 1.75;
 }
 
 fn fbm4(x: f32, y: f32, seed: i32) -> f32 {
   let o0 = smooth_noise(x, y, seed);
-  let o1 = smooth_noise(x * 2.0, y * 2.0, seed) * 0.5;
-  let o2 = smooth_noise(x * 4.0, y * 4.0, seed) * 0.25;
-  let o3 = smooth_noise(x * 8.0, y * 8.0, seed) * 0.125;
+  let o1 = smooth_noise(x * 2.0, y * 2.0, seed + FBM_SEED_STRIDE) * 0.5;
+  let o2 = smooth_noise(x * 4.0, y * 4.0, seed + FBM_SEED_STRIDE * 2) * 0.25;
+  let o3 = smooth_noise(x * 8.0, y * 8.0, seed + FBM_SEED_STRIDE * 3) * 0.125;
   return (o0 + o1 + o2 + o3) / 1.875;
 }
 
@@ -207,7 +234,7 @@ fn fbm4(x: f32, y: f32, seed: i32) -> f32 {
 // ============================================================
 
 fn calculate_element(terrain: u32, q: i32, r: i32, seed: i32) -> u32 {
-  let val = f32(hash(q, r, seed + HASH_ELEMENT) % 1000u) / 1000.0;
+  let val = f32(hash(q, r, seed + HASH_ELEMENT)) / 4294967296.0;
 
   if (terrain == T_MOUNTAIN) {
     if (val > MOUNTAIN_SECRET) { return E_SECRET; }
@@ -230,7 +257,7 @@ fn calculate_settlement_score(terrain: u32, q: i32, r: i32, seed: i32) -> f32 {
   if (terrain == T_PLAIN) { score += SETTLEMENT_PLAIN_BONUS; }
   if (terrain == T_HILL) { score += SETTLEMENT_HILL_BONUS; }
   if (terrain == T_DESERT) { score -= SETTLEMENT_DESERT_PENALTY; }
-  let chaos = f32(hash(q, r, seed + HASH_SETTLEMENT_CHAOS) % 100u) / 100.0;
+  let chaos = f32(hash(q, r, seed + HASH_SETTLEMENT_CHAOS)) / 4294967296.0;
   score += chaos * SETTLEMENT_CHAOS_WEIGHT;
   return score;
 }
@@ -258,22 +285,22 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (config.chaos > 0.0) {
     let warp_amount = config.chaos * DOMAIN_WARP_MAX;
     let wx = fbm3(wp.x * DOMAIN_WARP_SCALE, wp.y * DOMAIN_WARP_SCALE, seed + 900i);
-    let wy = fbm3(wp.x * DOMAIN_WARP_SCALE + 7.0, wp.y * DOMAIN_WARP_SCALE + 7.0, seed + 900i);
+    let wy = fbm3(wp.x * DOMAIN_WARP_SCALE + WARP_COORD_OFFSET, wp.y * DOMAIN_WARP_SCALE + WARP_COORD_OFFSET, seed + 900i);
     sx = wp.x + (wx - 0.5) * warp_amount;
     sy = wp.y + (wy - 0.5) * warp_amount;
   }
 
   // --- 1. LAYERED ELEVATION (world-space sampling) ---
-  let cont_freq = CONTINENTAL_SCALE * (0.25 + config.continent_scale * 1.5);
+  let cont_freq = CONTINENTAL_SCALE * (CONT_FREQ_BASE + config.continent_scale * CONT_FREQ_RANGE);
   let continental = fbm4(sx * cont_freq, sy * cont_freq, seed);
   let ridge_raw = fbm3(sx * RIDGE_SCALE, sy * RIDGE_SCALE, seed + 200i);
-  let ridge_exp = 0.3 + config.ridge_sharpness * 1.4;
+  let ridge_exp = RIDGE_EXP_BASE + config.ridge_sharpness * RIDGE_EXP_RANGE;
   let ridge = pow(1.0 - abs(2.0 * ridge_raw - 1.0), ridge_exp);
   let detail = fbm2(sx * DETAIL_SCALE, sy * DETAIL_SCALE, seed + 400i);
 
   // Erosion: suppress ridge and detail weights
-  let eff_ridge_weight = RIDGE_WEIGHT * (1.0 - config.erosion * 0.5);
-  let eff_detail_weight = DETAIL_WEIGHT * (1.0 - config.erosion * 0.9);
+  let eff_ridge_weight = RIDGE_WEIGHT * (1.0 - config.erosion * EROSION_RIDGE_FACTOR);
+  let eff_detail_weight = DETAIL_WEIGHT * (1.0 - config.erosion * EROSION_DETAIL_FACTOR);
 
   var elevation = clamp(
     continental * CONTINENTAL_WEIGHT
@@ -291,12 +318,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var sea_level = base_sea_level;
   if (config.coast_complexity > 0.0) {
     let coast_noise = fbm2(sx * COAST_NOISE_SCALE, sy * COAST_NOISE_SCALE, seed + 1100i) - 0.5;
-    sea_level = max(0.01, base_sea_level + coast_noise * config.coast_complexity * 0.1);
+    sea_level = max(COAST_MIN_SEA_LEVEL, base_sea_level + coast_noise * config.coast_complexity * COAST_AMPLITUDE);
   }
 
   // --- 2c. PLATEAU QUANTIZATION ---
   if (config.plateau_factor > 0.0) {
-    let bands = 3.0 + (1.0 - config.plateau_factor) * 20.0;
+    let bands = PLATEAU_BANDS_MIN + (1.0 - config.plateau_factor) * PLATEAU_BANDS_RANGE;
     let quantized = round(elevation * bands) / bands;
     let blend = config.plateau_factor * config.plateau_factor;
     elevation = elevation * (1.0 - blend) + quantized * blend;
@@ -308,7 +335,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let vrange = midpoint - sea_level;
     if (vrange > 0.0) {
       let t = (elevation - sea_level) / vrange;
-      let shaped = pow(t, 0.5 + config.valley_depth);
+      let shaped = pow(t, VALLEY_EXP_BASE + config.valley_depth);
       elevation = sea_level + shaped * vrange;
     }
   }
@@ -330,8 +357,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   // --- 4. RIVERS (world-space sampling) ---
   let rwx = sx * RIVER_SCALE;
   let rwy = sy * RIVER_SCALE;
-  let warp_x = fbm2(rwx * 0.5, rwy * 0.5, seed + 800i) * RIVER_WARP_AMOUNT;
-  let warp_y = fbm2(rwx * 0.5 + 5.0, rwy * 0.5 + 5.0, seed + 800i) * RIVER_WARP_AMOUNT;
+  let warp_x = fbm2(rwx * RIVER_WARP_FREQ, rwy * RIVER_WARP_FREQ, seed + 800i) * RIVER_WARP_AMOUNT;
+  let warp_y = fbm2(rwx * RIVER_WARP_FREQ + RIVER_WARP_OFFSET, rwy * RIVER_WARP_FREQ + RIVER_WARP_OFFSET, seed + 800i) * RIVER_WARP_AMOUNT;
   let river_noise = fbm2(rwx + warp_x, rwy + warp_y, seed + 700i);
   let river_valley = abs(river_noise - 0.5) * 2.0;
   let is_river = (config.force_no_river == 0u)
@@ -341,20 +368,20 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   // --- 5. BIOME SELECTION with temperature shift ---
   let temp_shift = config.temperature - 0.5;
-  let desert_threshold = MOISTURE_DESERT + temp_shift * 0.3;
-  let forest_threshold = MOISTURE_FOREST + temp_shift * 0.2;
-  let marsh_threshold = MOISTURE_MARSH - temp_shift * 0.2;
+  let desert_threshold = MOISTURE_DESERT + temp_shift * TEMP_DESERT_SHIFT;
+  let forest_threshold = MOISTURE_FOREST + temp_shift * TEMP_FOREST_SHIFT;
+  let marsh_threshold = MOISTURE_MARSH - temp_shift * TEMP_FOREST_SHIFT;
 
   var terrain = T_PLAIN;
   var flavor = F_WILDERNESS;
 
   if (elevation < sea_level) {
     terrain = T_WATER;
-    if (elevation < sea_level * 0.5) { flavor = F_DEEP_OCEAN; }
+    if (elevation < sea_level * DEEP_OCEAN_RATIO) { flavor = F_DEEP_OCEAN; }
     else { flavor = F_SHALLOW_SEA; }
   } else if (elevation > mt_threshold) {
     terrain = T_MOUNTAIN;
-    if (moisture > 0.5) { flavor = F_SNOW_PEAK; }
+    if (moisture > SNOW_MOISTURE) { flavor = F_SNOW_PEAK; }
     else { flavor = F_BARE_PEAK; }
   } else if (is_river) {
     terrain = T_WATER;
@@ -385,7 +412,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   // --- 6. ELEMENT & SETTLEMENT (per-hex, uses integer coords) ---
   let element = calculate_element(terrain, q, r, seed);
-  let sroll = f32(hash(q, r, seed + HASH_SETTLEMENT_ROLL) % 100u) / 100.0;
+  let sroll = f32(hash(q, r, seed + HASH_SETTLEMENT_ROLL)) / 4294967296.0;
 
   var final_terrain = terrain;
   if (element == E_FEATURE && sroll > SETTLEMENT_ROLL_THRESHOLD) {

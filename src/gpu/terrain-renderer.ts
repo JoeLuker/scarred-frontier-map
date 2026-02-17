@@ -55,6 +55,7 @@ struct VertexOut {
 }
 
 // Karst terrain profile: flat valleys, steep cliff walls, tower peaks
+// PARALLEL IMPLEMENTATION: Must match terrain-mesh.ts karstHeight() (CPU-side normal computation).
 fn karst_height(h: f32) -> f32 {
   let cliff = smoothstep(0.12, 0.28, h);
   let peak = pow(h, 0.65);
@@ -93,9 +94,19 @@ fn vs_main(in: VertexIn) -> VertexOut {
 const PI: f32 = 3.14159265359;
 const SQRT3: f32 = 1.7320508075688772;
 
-// Hex grid SDF: distance from world position to nearest hex edge
-fn hex_edge_distance(wx: f32, wz: f32, hex_size: f32) -> f32 {
-  // Convert pixel → fractional axial
+// ============================================================
+// Unified pixel → hex conversion (single source of truth)
+// Returns rounded axial coords AND edge distance for SDF grid.
+// Mirrors src/core/geometry.ts pixelToHex (pointy-top layout).
+// ============================================================
+
+struct HexInfo {
+  qr: vec2f,       // rounded axial (q, r)
+  edge_dist: f32,  // 0 = center, 0.5 = edge (cube-space max-diff)
+}
+
+fn pixel_to_hex(wx: f32, wz: f32, hex_size: f32) -> HexInfo {
+  // Pixel → fractional axial (pointy-top)
   let inv_sqrt3 = 1.0 / SQRT3;
   let fq = (inv_sqrt3 * wx / hex_size) - (wz / (3.0 * hex_size));
   let fr = (2.0 / 3.0) * wz / hex_size;
@@ -105,7 +116,7 @@ fn hex_edge_distance(wx: f32, wz: f32, hex_size: f32) -> f32 {
   let fz = fr;
   let fy = -fx - fz;
 
-  // Round to nearest hex center
+  // Round to nearest hex center (cube-coordinate rounding)
   var rx = round(fx);
   var ry = round(fy);
   var rz = round(fz);
@@ -120,44 +131,20 @@ fn hex_edge_distance(wx: f32, wz: f32, hex_size: f32) -> f32 {
     rz = -rx - ry;
   }
 
-  // Distance from fractional to rounded (in cube space)
-  let diff_x = abs(fx - rx);
-  let diff_y = abs(fy - ry);
-  let diff_z = abs(fz - rz);
+  // Edge distance: max cube-space diff (0 = center, 0.5 = edge)
+  let edge = max(abs(fx - rx), max(abs(fy - ry), abs(fz - rz)));
 
-  // Max of cube diffs gives distance to hex edge (0 = center, 0.5 = edge)
-  return max(diff_x, max(diff_y, diff_z));
+  return HexInfo(vec2f(rx, rz), edge);
 }
 
-// Look up hex state texture by world position
-fn sample_hex_state(wx: f32, wz: f32, hex_size: f32, grid_radius: f32) -> vec4f {
-  // World → axial hex coords
-  let inv_sqrt3 = 1.0 / SQRT3;
-  let fq = (inv_sqrt3 * wx / hex_size) - (wz / (3.0 * hex_size));
-  let fr = (2.0 / 3.0) * wz / hex_size;
-
-  // Round
-  let fx = fq;
-  let fz = fr;
-  let fy = -fx - fz;
-  var rq = round(fx);
-  var rr = round(fz);
-  let ry = round(fy);
-  let dx = abs(rq - fx);
-  let dy = abs(ry - fy);
-  let dz = abs(rr - fz);
-  if (dx > dy && dx > dz) {
-    rq = -ry - rr;
-  } else if (dy <= dz) {
-    rr = -rq - ry;
-  }
-
-  // Map axial (q, r) to texture UV: center at (gridRadius, gridRadius)
+// Look up hex state texture by axial coords
+fn lookup_hex_state(hex_qr: vec2f, grid_radius: f32) -> vec4f {
+  let rq = hex_qr.x;
+  let rr = hex_qr.y;
   let tex_size = grid_radius * 2.0 + 1.0;
   let tx = (rq + grid_radius) / tex_size;
   let tz = (rr + grid_radius) / tex_size;
 
-  // Out of bounds → unexplored, no tint
   if (tx < 0.0 || tx > 1.0 || tz < 0.0 || tz > 1.0) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
   }
@@ -167,32 +154,11 @@ fn sample_hex_state(wx: f32, wz: f32, hex_size: f32, grid_radius: f32) -> vec4f 
 }
 
 // ============================================================
-// World position → hex axial coordinates (rounded)
-// ============================================================
-
-fn world_to_hex(wx: f32, wz: f32, hex_size: f32) -> vec2f {
-  let inv_sqrt3 = 1.0 / SQRT3;
-  let fq = (inv_sqrt3 * wx / hex_size) - (wz / (3.0 * hex_size));
-  let fr = (2.0 / 3.0) * wz / hex_size;
-  let fx = fq;
-  let fz = fr;
-  let fy = -fx - fz;
-  var rq = round(fx);
-  var rr = round(fz);
-  let ry = round(fy);
-  let dx = abs(rq - fx);
-  let dy = abs(ry - fy);
-  let dz = abs(rr - fz);
-  if (dx > dy && dx > dz) {
-    rq = -ry - rr;
-  } else if (dy <= dz) {
-    rr = -rq - ry;
-  }
-  return vec2f(rq, rr);
-}
-
-// ============================================================
-// Hash / noise utilities (GPU-side, no textures needed)
+// Hash / noise utilities (GPU fragment shader)
+// INTENTIONALLY DIFFERENT from terrain-compute.ts noise (which mirrors core/noise.ts).
+// These use a fast vec2→float hash for real-time visual detail (rock texture, snow,
+// per-hex variation). The compute shader uses integer lattice hashing for deterministic
+// terrain generation. The two noise systems serve different purposes and don't need to match.
 // ============================================================
 
 fn hash2(p: vec2f) -> f32 {
@@ -344,9 +310,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   // --- Base biome color ---
   var color = biome_color(in.elevation, in.moisture, in.terrain_id, in.world_pos.xz);
 
+  // --- Resolve hex once (single pixel_to_hex call for all hex-based lookups) ---
+  let hex = pixel_to_hex(in.world_pos.x, in.world_pos.z, u.hex_size);
+
   // --- Per-hex color variation (each tile subtly distinct) ---
-  let hex_qr = world_to_hex(in.world_pos.x, in.world_pos.z, u.hex_size);
-  let hex_hash = hash2(hex_qr * 0.73 + vec2f(17.3, 31.7));
+  let hex_hash = hash2(hex.qr * 0.73 + vec2f(17.3, 31.7));
   color *= (0.95 + hex_hash * 0.10);
 
   // --- Water specular + Fresnel ---
@@ -418,16 +386,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     color += rim * rim_sun * SUN_COLOR * 0.15;
   }
 
-  // --- Hex grid overlay (SDF) ---
-  let edge_dist = hex_edge_distance(in.world_pos.x, in.world_pos.z, u.hex_size);
+  // --- Hex grid overlay (SDF, uses hex.edge_dist from earlier pixel_to_hex) ---
+  let edge_dist = hex.edge_dist;
   let edge_aa = fwidth(edge_dist);
   var grid_line = smoothstep(0.5 - edge_aa * 2.0, 0.5, edge_dist);
   var grid_opacity = u.hex_grid_opacity;
 
   // --- Hex state (fog of war + planar effects) ---
-  let hex_state = sample_hex_state(in.world_pos.x, in.world_pos.z, u.hex_size, u.grid_radius);
+  let hex_state = lookup_hex_state(hex.qr, u.grid_radius);
   let explored = hex_state.r;
-  let plane_type = u32(round(hex_state.g * 7.0));
+  let plane_type = u32(round(hex_state.g * 255.0));
   let p_intensity = hex_state.b;
   let ring_boundary = hex_state.a;
 

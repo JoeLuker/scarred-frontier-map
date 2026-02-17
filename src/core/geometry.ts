@@ -51,16 +51,31 @@ export const getSectorRadius = (hexSize: number, spacing: number): number => {
 
 // --- Math Helpers ---
 
-export const axialRound = (x: number, y: number): AxialCoord => {
-  const xgrid = Math.round(x);
-  const ygrid = Math.round(y);
-  const xrem = x - xgrid;
-  const yrem = y - ygrid;
-  if (Math.abs(xrem) >= Math.abs(yrem)) {
-    return { q: xgrid + Math.round(xrem + 0.5 * yrem), r: ygrid };
+/**
+ * Standard cube-coordinate rounding for hex grids.
+ * Converts axial (q, r) to cube (q, -q-r, r), rounds each component,
+ * then fixes the component with the largest rounding error to maintain q+y+r=0.
+ */
+export const axialRound = (q: number, r: number): AxialCoord => {
+  const y = -q - r;
+
+  let rq = Math.round(q);
+  let ry = Math.round(y);
+  let rr = Math.round(r);
+
+  const dq = Math.abs(rq - q);
+  const dy = Math.abs(ry - y);
+  const dr = Math.abs(rr - r);
+
+  if (dq > dy && dq > dr) {
+    rq = -ry - rr;
+  } else if (dy > dr) {
+    // ry = -rq - rr; (don't need ry for output)
   } else {
-    return { q: xgrid, r: ygrid + Math.round(yrem + 0.5 * xrem) };
+    rr = -rq - ry;
   }
+
+  return { q: rq, r: rr };
 };
 
 export const getHexDistance = (a: AxialCoord, b: AxialCoord): number => {
