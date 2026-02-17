@@ -6,7 +6,7 @@ export type {
   WorldGenConfig,
   WorldState,
   HistoryAction,
-  MutationRule,
+  ChemistryRule,
   AxialCoord,
   PixelCoord,
 } from './types';
@@ -28,7 +28,7 @@ export type { TerrainSample } from './terrain';
 export { generateWorld, revealSector, revealAll, regenerateUnexplored, regenerateTerrain } from './world';
 
 // Planar system
-export { computeHexState, applyOverlaysToMap, mutateTerrainByPlane } from './planar';
+export { computeHexState, applyOverlaysToMap, resolveChemistry } from './planar';
 
 // History engine
 export { applyAction, replayFrom, getActionLabel, EMPTY_STATE } from './history';

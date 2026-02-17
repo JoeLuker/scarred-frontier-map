@@ -35,6 +35,7 @@ export const generateWorld = (config: WorldGenConfig): HexData[] => {
         planarAlignment: PlanarAlignment.MATERIAL,
         planarIntensity: 0,
         planarInfluences: [],
+        reactionEmission: null,
       });
     }
   }
@@ -63,6 +64,7 @@ export const regenerateUnexplored = (
       planarAlignment: PlanarAlignment.MATERIAL,
       planarIntensity: 0,
       planarInfluences: [],
+      reactionEmission: null,
     };
   });
 };
@@ -93,6 +95,7 @@ export const regenerateTerrain = (
       planarAlignment: PlanarAlignment.MATERIAL,
       planarIntensity: 0,
       planarInfluences: [],
+      reactionEmission: null,
     };
   });
 };

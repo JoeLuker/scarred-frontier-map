@@ -2,7 +2,7 @@ import {
   TerrainType,
   PlanarAlignment,
   WorldGenConfig,
-  MutationRule,
+  ChemistryRule,
 } from './types';
 
 // --- World Layout ---
@@ -235,53 +235,125 @@ export function getTerrainRenderParams(cfg: WorldGenConfig): TerrainRenderParams
   };
 }
 
-// --- Planar Mutation Rules ---
+// --- Chemistry Rules ---
+// Flat rule table: collision rules (2+ planes) > chain rules (mutated terrain + plane) > single-plane rules.
+// Resolution engine in planar.ts scores by specificity; highest wins.
+// New reaction = one entry. New terrain/plane = enum + rules. Engine never changes.
 
-export const PLANAR_MUTATIONS: Partial<Record<PlanarAlignment, Partial<Record<TerrainType, MutationRule>>>> = {
-  [PlanarAlignment.FIRE]: {
-    [TerrainType.FOREST]:   { targetTerrain: TerrainType.MAGMA, flavorPrimary: 'Burning Weald', flavorSecondary: 'Singed Woods' },
-    [TerrainType.WATER]:    { targetTerrain: TerrainType.MAGMA, flavorPrimary: 'Boiling Caldera', flavorSecondary: 'Steam Vent' },
-    [TerrainType.MARSH]:    { targetTerrain: TerrainType.DESERT, flavorPrimary: 'Dried Clay', flavorSecondary: 'Mudflats' },
-    [TerrainType.PLAIN]:    { targetTerrain: TerrainType.DESERT, flavorPrimary: 'Scorched Earth', flavorSecondary: 'Dry Cracked Earth' },
-    [TerrainType.MOUNTAIN]: { targetTerrain: TerrainType.MAGMA, flavorPrimary: 'Volcano', flavorSecondary: 'Smoking Peak' },
-    [TerrainType.HILL]:     { targetTerrain: TerrainType.MAGMA, flavorPrimary: 'Lava Flows', flavorSecondary: 'Hot Springs' },
-  },
-  [PlanarAlignment.WATER]: {
-    [TerrainType.DESERT]:   { targetTerrain: TerrainType.WATER, flavorPrimary: 'Oasis Lake', flavorSecondary: 'Salt Marsh' },
-    [TerrainType.PLAIN]:    { targetTerrain: TerrainType.MARSH, flavorPrimary: 'Tidal Flat', flavorSecondary: 'Waterlogged Plains' },
-    [TerrainType.MOUNTAIN]: { targetTerrain: TerrainType.HILL, flavorPrimary: 'Eroded Peaks', flavorSecondary: 'Rain-Slicked Crags' },
-    [TerrainType.HILL]:     { targetTerrain: TerrainType.WATER, flavorPrimary: 'Submerged Hills', flavorSecondary: 'Island Chain' },
-    [TerrainType.MAGMA]:    { targetTerrain: TerrainType.MOUNTAIN, flavorPrimary: 'Obsidian Field', flavorSecondary: 'Cooled Rock' },
-  },
-  [PlanarAlignment.EARTH]: {
-    [TerrainType.FOREST]:   { targetTerrain: TerrainType.MOUNTAIN, flavorPrimary: 'Petrified Forest', flavorSecondary: 'Stony Thicket' },
-    [TerrainType.WATER]:    { targetTerrain: TerrainType.HILL, flavorPrimary: 'Land Bridge', flavorSecondary: 'Filled-in Riverbed' },
-    [TerrainType.PLAIN]:    { targetTerrain: TerrainType.HILL, flavorPrimary: 'Jagged Plateaus', flavorSecondary: 'Rocky Fields' },
-    [TerrainType.MAGMA]:    { targetTerrain: TerrainType.MOUNTAIN, flavorPrimary: 'Capped Volcano', flavorSecondary: 'Basalt Pillars' },
-  },
-  [PlanarAlignment.AIR]: {
-    [TerrainType.MOUNTAIN]: { targetTerrain: TerrainType.FLOATING, flavorPrimary: 'Floating Earthmote', flavorSecondary: 'Wind-Carved Spire' },
-    [TerrainType.WATER]:    { flavorPrimary: 'Endless Cloud Sea', flavorSecondary: 'Misty Lake' },
-    [TerrainType.PLAIN]:    { targetTerrain: TerrainType.FLOATING, flavorPrimary: 'Sky Plateau', flavorSecondary: 'Breezy Steppe' },
-    [TerrainType.FOREST]:   { flavorPrimary: 'Whispering Woods', flavorSecondary: 'Rustling Grove' },
-    [TerrainType.MARSH]:    { targetTerrain: TerrainType.PLAIN, flavorPrimary: 'Mist Valley', flavorSecondary: 'Foggy Fen' },
-  },
-  [PlanarAlignment.POSITIVE]: {
-    [TerrainType.DESERT]:   { targetTerrain: TerrainType.CRYSTAL, flavorPrimary: 'Glass Sands', flavorSecondary: 'Blooming Sands' },
-    [TerrainType.MARSH]:    { targetTerrain: TerrainType.FOREST, flavorPrimary: 'Glimmering Grove', flavorSecondary: 'Sparkling Bog' },
-    [TerrainType.MOUNTAIN]: { targetTerrain: TerrainType.CRYSTAL, flavorPrimary: 'Crystal Peak', flavorSecondary: 'Shining Summit' },
-    [TerrainType.PLAIN]:    { targetTerrain: TerrainType.FOREST, flavorPrimary: 'Elysian Fields', flavorSecondary: 'Vibrant Meadow' },
-    [TerrainType.FOREST]:   { targetTerrain: TerrainType.CRYSTAL, flavorPrimary: 'Towering Lightwood', flavorSecondary: 'Sun-dappled Grove' },
-  },
-  [PlanarAlignment.NEGATIVE]: {
-    [TerrainType.FOREST]:     { targetTerrain: TerrainType.MARSH, flavorPrimary: 'Rotting Weald', flavorSecondary: 'Withered Grove' },
-    [TerrainType.WATER]:      { flavorPrimary: 'Stagnant Blackwater', flavorSecondary: 'Oily Waters' },
-    [TerrainType.SETTLEMENT]: { flavorPrimary: 'Ghost Town', flavorSecondary: 'Abandoned Outpost' },
-    [TerrainType.PLAIN]:      { targetTerrain: TerrainType.DESERT, flavorPrimary: 'Ash Waste', flavorSecondary: 'Grey Plains' },
-  },
-  [PlanarAlignment.SCAR]: {
-    [TerrainType.PLAIN]:  { targetTerrain: TerrainType.MAGMA, flavorPrimary: 'Reality Rift', flavorSecondary: 'Warped Badlands' },
-    [TerrainType.FOREST]: { targetTerrain: TerrainType.MARSH, flavorPrimary: 'Flesh-Like Growth', flavorSecondary: 'Twisted Thorns' },
-  },
-};
+export const CHEMISTRY_RULES: readonly ChemistryRule[] = [
+
+  // ── Collision rules (2+ planes present simultaneously) ──────────────────
+
+  { planes: [PlanarAlignment.FIRE, PlanarAlignment.WATER],
+    outputTerrain: TerrainType.DESERT, flavorPrimary: 'Steam Wastes', flavorSecondary: 'Hissing Mire', emit: PlanarAlignment.AIR },
+  { planes: [PlanarAlignment.FIRE, PlanarAlignment.EARTH],
+    outputTerrain: TerrainType.MAGMA, flavorPrimary: 'Volcanic Forge', flavorSecondary: 'Smoldering Cavern' },
+  { planes: [PlanarAlignment.FIRE, PlanarAlignment.AIR],
+    outputTerrain: TerrainType.DESERT, flavorPrimary: 'Firestorm Barrens', flavorSecondary: 'Scorching Gale' },
+  { planes: [PlanarAlignment.WATER, PlanarAlignment.EARTH],
+    outputTerrain: TerrainType.MARSH, flavorPrimary: 'Primordial Mud', flavorSecondary: 'Sodden Earth' },
+  { planes: [PlanarAlignment.WATER, PlanarAlignment.AIR],
+    flavorPrimary: 'Endless Tempest', flavorSecondary: 'Driving Rain' },
+  { planes: [PlanarAlignment.EARTH, PlanarAlignment.AIR],
+    outputTerrain: TerrainType.FLOATING, flavorPrimary: 'Shattered Uplift', flavorSecondary: 'Dust Devil' },
+  { planes: [PlanarAlignment.POSITIVE, PlanarAlignment.NEGATIVE],
+    outputTerrain: TerrainType.CRYSTAL, flavorPrimary: 'Reality Fracture', flavorSecondary: 'Flickering Veil', emit: PlanarAlignment.SCAR },
+  { planes: [PlanarAlignment.FIRE, PlanarAlignment.NEGATIVE],
+    outputTerrain: TerrainType.MAGMA, flavorPrimary: 'Hellfire Pit', flavorSecondary: 'Smoldering Shadow' },
+  { planes: [PlanarAlignment.WATER, PlanarAlignment.POSITIVE],
+    flavorPrimary: 'Font of Renewal', flavorSecondary: 'Blessed Spring' },
+
+  // ── Chain rules (mutated terrain + plane) ───────────────────────────────
+
+  { terrain: TerrainType.MAGMA, planes: [PlanarAlignment.WATER],
+    outputTerrain: TerrainType.MOUNTAIN, flavorPrimary: 'Obsidian Field', flavorSecondary: 'Cooled Rock' },
+  { terrain: TerrainType.MAGMA, planes: [PlanarAlignment.AIR],
+    outputTerrain: TerrainType.DESERT, flavorPrimary: 'Ash Cloud', flavorSecondary: 'Cinder Haze' },
+  { terrain: TerrainType.MAGMA, planes: [PlanarAlignment.EARTH],
+    outputTerrain: TerrainType.MOUNTAIN, flavorPrimary: 'Capped Volcano', flavorSecondary: 'Basalt Pillars' },
+  { terrain: TerrainType.CRYSTAL, planes: [PlanarAlignment.FIRE],
+    outputTerrain: TerrainType.MAGMA, flavorPrimary: 'Melted Prisms', flavorSecondary: 'Glowing Shards' },
+  { terrain: TerrainType.CRYSTAL, planes: [PlanarAlignment.EARTH],
+    outputTerrain: TerrainType.MOUNTAIN, flavorPrimary: 'Geode Mountains', flavorSecondary: 'Encrusted Peaks' },
+  { terrain: TerrainType.FLOATING, planes: [PlanarAlignment.FIRE],
+    outputTerrain: TerrainType.MAGMA, flavorPrimary: 'Burning Skyfall', flavorSecondary: 'Smoldering Islet' },
+  { terrain: TerrainType.FLOATING, planes: [PlanarAlignment.EARTH],
+    outputTerrain: TerrainType.MOUNTAIN, flavorPrimary: 'Grounded Monolith', flavorSecondary: 'Settled Stone' },
+  { terrain: TerrainType.FLOATING, planes: [PlanarAlignment.NEGATIVE],
+    outputTerrain: TerrainType.DESERT, flavorPrimary: 'Void Remnant', flavorSecondary: 'Fading Mote' },
+
+  // ── Single-plane rules (base terrain + one plane) ──────────────────────
+
+  // Fire
+  { terrain: TerrainType.FOREST, planes: [PlanarAlignment.FIRE],
+    outputTerrain: TerrainType.MAGMA, flavorPrimary: 'Burning Weald', flavorSecondary: 'Singed Woods' },
+  { terrain: TerrainType.WATER, planes: [PlanarAlignment.FIRE],
+    outputTerrain: TerrainType.MAGMA, flavorPrimary: 'Boiling Caldera', flavorSecondary: 'Steam Vent' },
+  { terrain: TerrainType.MARSH, planes: [PlanarAlignment.FIRE],
+    outputTerrain: TerrainType.DESERT, flavorPrimary: 'Dried Clay', flavorSecondary: 'Mudflats' },
+  { terrain: TerrainType.PLAIN, planes: [PlanarAlignment.FIRE],
+    outputTerrain: TerrainType.DESERT, flavorPrimary: 'Scorched Earth', flavorSecondary: 'Dry Cracked Earth' },
+  { terrain: TerrainType.MOUNTAIN, planes: [PlanarAlignment.FIRE],
+    outputTerrain: TerrainType.MAGMA, flavorPrimary: 'Volcano', flavorSecondary: 'Smoking Peak' },
+  { terrain: TerrainType.HILL, planes: [PlanarAlignment.FIRE],
+    outputTerrain: TerrainType.MAGMA, flavorPrimary: 'Lava Flows', flavorSecondary: 'Hot Springs' },
+
+  // Water
+  { terrain: TerrainType.DESERT, planes: [PlanarAlignment.WATER],
+    outputTerrain: TerrainType.WATER, flavorPrimary: 'Oasis Lake', flavorSecondary: 'Salt Marsh' },
+  { terrain: TerrainType.PLAIN, planes: [PlanarAlignment.WATER],
+    outputTerrain: TerrainType.MARSH, flavorPrimary: 'Tidal Flat', flavorSecondary: 'Waterlogged Plains' },
+  { terrain: TerrainType.MOUNTAIN, planes: [PlanarAlignment.WATER],
+    outputTerrain: TerrainType.HILL, flavorPrimary: 'Eroded Peaks', flavorSecondary: 'Rain-Slicked Crags' },
+  { terrain: TerrainType.HILL, planes: [PlanarAlignment.WATER],
+    outputTerrain: TerrainType.WATER, flavorPrimary: 'Submerged Hills', flavorSecondary: 'Island Chain' },
+
+  // Earth
+  { terrain: TerrainType.FOREST, planes: [PlanarAlignment.EARTH],
+    outputTerrain: TerrainType.MOUNTAIN, flavorPrimary: 'Petrified Forest', flavorSecondary: 'Stony Thicket' },
+  { terrain: TerrainType.WATER, planes: [PlanarAlignment.EARTH],
+    outputTerrain: TerrainType.HILL, flavorPrimary: 'Land Bridge', flavorSecondary: 'Filled-in Riverbed' },
+  { terrain: TerrainType.PLAIN, planes: [PlanarAlignment.EARTH],
+    outputTerrain: TerrainType.HILL, flavorPrimary: 'Jagged Plateaus', flavorSecondary: 'Rocky Fields' },
+
+  // Air
+  { terrain: TerrainType.MOUNTAIN, planes: [PlanarAlignment.AIR],
+    outputTerrain: TerrainType.FLOATING, flavorPrimary: 'Floating Earthmote', flavorSecondary: 'Wind-Carved Spire' },
+  { terrain: TerrainType.WATER, planes: [PlanarAlignment.AIR],
+    flavorPrimary: 'Endless Cloud Sea', flavorSecondary: 'Misty Lake' },
+  { terrain: TerrainType.PLAIN, planes: [PlanarAlignment.AIR],
+    outputTerrain: TerrainType.FLOATING, flavorPrimary: 'Sky Plateau', flavorSecondary: 'Breezy Steppe' },
+  { terrain: TerrainType.FOREST, planes: [PlanarAlignment.AIR],
+    flavorPrimary: 'Whispering Woods', flavorSecondary: 'Rustling Grove' },
+  { terrain: TerrainType.MARSH, planes: [PlanarAlignment.AIR],
+    outputTerrain: TerrainType.PLAIN, flavorPrimary: 'Mist Valley', flavorSecondary: 'Foggy Fen' },
+
+  // Positive Energy
+  { terrain: TerrainType.DESERT, planes: [PlanarAlignment.POSITIVE],
+    outputTerrain: TerrainType.CRYSTAL, flavorPrimary: 'Glass Sands', flavorSecondary: 'Blooming Sands' },
+  { terrain: TerrainType.MARSH, planes: [PlanarAlignment.POSITIVE],
+    outputTerrain: TerrainType.FOREST, flavorPrimary: 'Glimmering Grove', flavorSecondary: 'Sparkling Bog' },
+  { terrain: TerrainType.MOUNTAIN, planes: [PlanarAlignment.POSITIVE],
+    outputTerrain: TerrainType.CRYSTAL, flavorPrimary: 'Crystal Peak', flavorSecondary: 'Shining Summit' },
+  { terrain: TerrainType.PLAIN, planes: [PlanarAlignment.POSITIVE],
+    outputTerrain: TerrainType.FOREST, flavorPrimary: 'Elysian Fields', flavorSecondary: 'Vibrant Meadow' },
+  { terrain: TerrainType.FOREST, planes: [PlanarAlignment.POSITIVE],
+    outputTerrain: TerrainType.CRYSTAL, flavorPrimary: 'Towering Lightwood', flavorSecondary: 'Sun-dappled Grove' },
+
+  // Negative Energy
+  { terrain: TerrainType.FOREST, planes: [PlanarAlignment.NEGATIVE],
+    outputTerrain: TerrainType.MARSH, flavorPrimary: 'Rotting Weald', flavorSecondary: 'Withered Grove' },
+  { terrain: TerrainType.WATER, planes: [PlanarAlignment.NEGATIVE],
+    flavorPrimary: 'Stagnant Blackwater', flavorSecondary: 'Oily Waters' },
+  { terrain: TerrainType.SETTLEMENT, planes: [PlanarAlignment.NEGATIVE],
+    flavorPrimary: 'Ghost Town', flavorSecondary: 'Abandoned Outpost' },
+  { terrain: TerrainType.PLAIN, planes: [PlanarAlignment.NEGATIVE],
+    outputTerrain: TerrainType.DESERT, flavorPrimary: 'Ash Waste', flavorSecondary: 'Grey Plains' },
+
+  // World Scar
+  { terrain: TerrainType.PLAIN, planes: [PlanarAlignment.SCAR],
+    outputTerrain: TerrainType.MAGMA, flavorPrimary: 'Reality Rift', flavorSecondary: 'Warped Badlands' },
+  { terrain: TerrainType.FOREST, planes: [PlanarAlignment.SCAR],
+    outputTerrain: TerrainType.MARSH, flavorPrimary: 'Flesh-Like Growth', flavorSecondary: 'Twisted Thorns' },
+];
 

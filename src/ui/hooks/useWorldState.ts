@@ -174,6 +174,7 @@ export const useWorldState = () => {
             planarAlignment: PlanarAlignment.MATERIAL,
             planarIntensity: 0,
             planarInfluences: [],
+            reactionEmission: null,
           };
         });
         const withOverlays = applyOverlaysToMap(newHexes, committed.overlays);

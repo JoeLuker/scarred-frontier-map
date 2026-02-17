@@ -80,6 +80,7 @@ export interface HexData {
   planarAlignment: PlanarAlignment;
   planarIntensity: number;
   planarInfluences: PlanarInfluence[];
+  reactionEmission: PlanarAlignment | null;
 }
 
 export interface WorldGenConfig {
@@ -100,10 +101,17 @@ export interface WorldGenConfig {
   readonly verticality: number;
 }
 
-export interface MutationRule {
-  readonly targetTerrain?: TerrainType | undefined;
-  readonly flavorPrimary: string;
-  readonly flavorSecondary: string;
+export interface ChemistryRule {
+  // Conditions — all specified must be met for rule to match
+  readonly terrain?: TerrainType | undefined;            // hex terrain (omit = any terrain)
+  readonly planes: readonly PlanarAlignment[];           // all must be present
+  readonly minIntensity?: number | undefined;            // threshold (default 0.1)
+
+  // Results
+  readonly outputTerrain?: TerrainType | undefined;      // new terrain (omit = keep current)
+  readonly flavorPrimary: string;                        // high-intensity description
+  readonly flavorSecondary: string;                      // low-intensity description
+  readonly emit?: PlanarAlignment | undefined;           // virtual emission
 }
 
 // --- Action-based history ---
