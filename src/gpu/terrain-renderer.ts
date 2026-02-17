@@ -102,7 +102,7 @@ const SQRT3: f32 = 1.7320508075688772;
 
 struct HexInfo {
   qr: vec2f,       // rounded axial (q, r)
-  edge_dist: f32,  // 0 = center, 0.5 = edge (cube-space max-diff)
+  edge_dist: f32,  // 0 = center, 0.5 = edge (pointy-top hex SDF in pixel space)
 }
 
 fn pixel_to_hex(wx: f32, wz: f32, hex_size: f32) -> HexInfo {
@@ -131,8 +131,18 @@ fn pixel_to_hex(wx: f32, wz: f32, hex_size: f32) -> HexInfo {
     rz = -rx - ry;
   }
 
-  // Edge distance: max cube-space diff (0 = center, 0.5 = edge)
-  let edge = max(abs(fx - rx), max(abs(fy - ry), abs(fz - rz)));
+  // Edge distance: pointy-top hex SDF in pixel space (0 = center, 0.5 = edge).
+  // The cube-space Chebyshev metric max(|dx|,|dy|,|dz|) traces a FLAT-TOP hex,
+  // but our tiles are pointy-top. Compute the actual distance to the pointy-top
+  // hex edge using the pixel-space offset from the hex center.
+  let center_x = hex_size * SQRT3 * (rx + rz * 0.5);
+  let center_z = hex_size * 1.5 * rz;
+  let lx = abs(wx - center_x);
+  let lz = abs(wz - center_z);
+  // Pointy-top SDF: max of right-edge projection and diagonal-edge projection.
+  // Apothem (center-to-edge) = hex_size * √3/2, so normalizing by hex_size * √3
+  // gives the 0–0.5 range matching the old convention.
+  let edge = max(lx, 0.5 * lx + (SQRT3 / 2.0) * lz) / (SQRT3 * hex_size);
 
   return HexInfo(vec2f(rx, rz), edge);
 }
