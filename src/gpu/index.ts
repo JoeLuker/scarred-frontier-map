@@ -1,6 +1,6 @@
 export { initWebGPU, getGpuContext } from './context';
 export { TerrainRenderer } from './terrain-renderer';
-export { TerrainMesh, buildTerrainMesh } from './terrain-mesh';
+export { TerrainMesh, buildTerrainMesh, computeDisplacedY } from './terrain-mesh';
 export { HexStateTexture } from './hex-state-texture';
 export { TerrainCompute, terrainFromId, elementFromId, flavorFromId } from './terrain-compute';
 export { getViewProjection, screenToGround, worldToScreen, getEyePosition } from './camera';

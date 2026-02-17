@@ -1,6 +1,6 @@
 import { WorldGenConfig } from '../core/types';
 import { sampleTerrain } from '../core/terrain';
-import { TERRAIN, RENDER } from '../core/config';
+import { getTerrainRenderParams } from '../core/config';
 import { MESH_VERTEX_STRIDE } from './types';
 
 export interface MeshBuffers {
@@ -28,7 +28,8 @@ function karstHeight(h: number): number {
 
 // Layer 1 (Geometry): Pure heightfield displacement. No terrain type awareness.
 // Rivers have elevation = seaLevel (set by sampleTerrain), so they naturally get y=0.
-function computeDisplacedY(
+// Exported for CPU-side elevation queries (hover/selection overlay alignment).
+export function computeDisplacedY(
   elevation: number,
   seaLevel: number,
   landRange: number,
@@ -69,10 +70,7 @@ export function buildTerrainMesh(
   const originX = -halfExtent;
   const originZ = -halfExtent;
 
-  // Derive height params from config (must match HexGrid.tsx renderGpu uniform logic)
-  const seaLevel = TERRAIN.SEA_LEVEL_MIN + config.waterLevel * TERRAIN.SEA_LEVEL_RANGE;
-  const landRange = 1 - seaLevel;
-  const heightScale = hexSize * RENDER.HEIGHT_SCALE * (0.2 + config.verticality * 1.8);
+  const { seaLevel, landRange, heightScale } = getTerrainRenderParams(config);
 
   // --- Pass 1: Sample terrain, compute displaced Y, store per-grid-cell data ---
   const maxVerts = cols * rows;

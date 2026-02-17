@@ -216,6 +216,25 @@ export const CAMERA = {
   DRAG_THRESHOLD: 5,
 } as const;
 
+// --- Derived Terrain Render Params (single source of truth) ---
+// These formulas are used by: terrain-mesh.ts, terrain-renderer.ts (via uniforms),
+// HexGrid.tsx (uniforms + overlay alignment), terrain.ts (seaLevel for biome classification).
+
+export interface TerrainRenderParams {
+  readonly seaLevel: number;
+  readonly landRange: number;
+  readonly heightScale: number;
+}
+
+export function getTerrainRenderParams(cfg: WorldGenConfig): TerrainRenderParams {
+  const seaLevel = TERRAIN.SEA_LEVEL_MIN + cfg.waterLevel * TERRAIN.SEA_LEVEL_RANGE;
+  return {
+    seaLevel,
+    landRange: 1 - seaLevel,
+    heightScale: WORLD.HEX_SIZE * RENDER.HEIGHT_SCALE * (0.2 + cfg.verticality * 1.8),
+  };
+}
+
 // --- Planar Mutation Rules ---
 
 export const PLANAR_MUTATIONS: Partial<Record<PlanarAlignment, Partial<Record<TerrainType, MutationRule>>>> = {

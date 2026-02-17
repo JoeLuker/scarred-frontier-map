@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { HexData, PlanarOverlay, WorldGenConfig, TerrainType } from '../../core/types';
-import { WORLD, RENDER, TERRAIN, CAMERA, MESH } from '../../core/config';
+import { WORLD, RENDER, TERRAIN, CAMERA, MESH, getTerrainRenderParams } from '../../core/config';
 import { TERRAIN_COLORS, PLANAR_COLORS } from '../theme';
 import { hexToPixel, pixelToHex } from '../../core/geometry';
 import { hexToRgb } from './renderUtils';
@@ -10,9 +10,11 @@ import {
   TerrainRenderer,
   TerrainMesh,
   buildTerrainMesh,
+  computeDisplacedY,
   HexStateTexture,
   worldToScreen,
   getEyePosition,
+  screenToGround,
   TERRAIN_ORDER,
 } from '../../gpu';
 
@@ -232,9 +234,37 @@ export const HexGrid: React.FC<HexGridProps> = ({
     }
     const result = onCamMove(e);
     if (!result || result.isDragging) return;
-    const hexCoords = pixelToHex(result.worldX, result.worldY, WORLD.HEX_SIZE);
-    const idx = hexLookupRef.current.get(`${hexCoords.q},${hexCoords.r}`);
-    hoveredHexIndexRef.current = idx !== undefined ? idx : -1;
+
+    // Initial hex from Y=0 raycast
+    const hex0 = pixelToHex(result.worldX, result.worldY, WORLD.HEX_SIZE);
+    const idx0 = hexLookupRef.current.get(`${hex0.q},${hex0.r}`);
+
+    // Refine: re-raycast at actual terrain elevation for accurate hit
+    if (idx0 !== undefined) {
+      const hexData = hexesRef.current[idx0]!;
+      const { seaLevel, landRange, heightScale: hs } = getTerrainRenderParams(worldConfigRef.current);
+      const terrainY = computeDisplacedY(hexData.elevation, seaLevel, landRange, hs);
+
+      if (terrainY > 0.5) {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) {
+          const refined = screenToGround(
+            e.clientX - rect.left, e.clientY - rect.top,
+            rect.width, rect.height,
+            camera.current, CAMERA.FOV, rect.width / rect.height,
+            terrainY,
+          );
+          if (refined) {
+            const hexR = pixelToHex(refined.x, refined.z, WORLD.HEX_SIZE);
+            const idxR = hexLookupRef.current.get(`${hexR.q},${hexR.r}`);
+            hoveredHexIndexRef.current = idxR !== undefined ? idxR : -1;
+            return;
+          }
+        }
+      }
+    }
+
+    hoveredHexIndexRef.current = idx0 !== undefined ? idx0 : -1;
   };
 
   const handleMouseUp = () => {
@@ -302,9 +332,8 @@ export const HexGrid: React.FC<HexGridProps> = ({
     const aspect = logW / logH;
     const viewProj = computeViewProjection(aspect);
     const cfg = worldConfigRef.current;
-    const heightScale = WORLD.HEX_SIZE * RENDER.HEIGHT_SCALE * (0.2 + cfg.verticality * 1.8);
+    const { seaLevel, heightScale } = getTerrainRenderParams(cfg);
 
-    const seaLevel = TERRAIN.SEA_LEVEL_MIN + cfg.waterLevel * TERRAIN.SEA_LEVEL_RANGE;
     const mountainThreshold = TERRAIN.MOUNTAIN_THRESHOLD_BASE - cfg.mountainLevel * TERRAIN.MOUNTAIN_THRESHOLD_RANGE;
     const hillThreshold = mountainThreshold - TERRAIN.HILL_OFFSET;
 
@@ -344,12 +373,16 @@ export const HexGrid: React.FC<HexGridProps> = ({
     const allHexes = hexesRef.current;
     const hoveredIdx = hoveredHexIndexRef.current;
 
+    // Height params for overlay projection
+    const landRange = 1 - seaLevel;
+
     // Hover highlight
     if (hoveredIdx >= 0) {
       const hovered = allHexes[hoveredIdx];
       if (hovered) {
         const hp = hexToPixel(hovered.coordinates.q, hovered.coordinates.r, WORLD.HEX_SIZE);
-        const screen = worldToScreen(hp.x, 0, hp.y, viewProj, logW, logH);
+        const hoverY = computeDisplacedY(hovered.elevation, seaLevel, landRange, heightScale);
+        const screen = worldToScreen(hp.x, hoverY, hp.y, viewProj, logW, logH);
         if (screen) {
           const radius = Math.max(4, 600 / cam.distance * WORLD.HEX_SIZE);
           ctx.beginPath();
@@ -376,7 +409,13 @@ export const HexGrid: React.FC<HexGridProps> = ({
     if (showGizmosRef.current) {
       activeOverlays.forEach(overlay => {
         const op = hexToPixel(overlay.coordinates.q, overlay.coordinates.r, WORLD.HEX_SIZE);
-        const screen = worldToScreen(op.x, 0, op.y, viewProj, logW, logH);
+        // Look up terrain elevation at gizmo position
+        const gizmoIdx = hexLookupRef.current.get(`${overlay.coordinates.q},${overlay.coordinates.r}`);
+        const gizmoHex = gizmoIdx !== undefined ? allHexes[gizmoIdx] : undefined;
+        const gizmoY = gizmoHex
+          ? computeDisplacedY(gizmoHex.elevation, seaLevel, landRange, heightScale)
+          : 0;
+        const screen = worldToScreen(op.x, gizmoY, op.y, viewProj, logW, logH);
         if (!screen) return;
         const color = PLANAR_COLORS[overlay.type];
         const radius = Math.max(6, 800 / cam.distance * WORLD.HEX_SIZE);

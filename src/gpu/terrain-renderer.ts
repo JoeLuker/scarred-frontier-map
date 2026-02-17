@@ -262,6 +262,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let ring_boundary = (a_byte & 1u) > 0u;
   let is_water = hex_terrain_id == 0u || in.elevation < sea;
 
+  // Curvature approximation — must be in uniform control flow (before any
+  // non-uniform branching) since dpdx/dpdy require all quad invocations active.
+  let ddx_e = dpdx(in.elevation);
+  let ddy_e = dpdy(in.elevation);
+  let curvature = clamp((dpdx(ddx_e) + dpdy(ddy_e)) * 200.0, -1.0, 1.0);
+
   // ═══════════════════════════════════════════════════════════════
   // LAYER 2: Surface Material
   // Base color from discrete terrain type (sharp hex boundaries) +
@@ -320,10 +326,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     let rock_blend = smoothstep(0.2, 0.55, slope);
     color = mix(color, textured_rock, rock_blend * 0.85);
 
-    // Curvature accent
-    let ddx_e = dpdx(in.elevation);
-    let ddy_e = dpdy(in.elevation);
-    let curvature = clamp((dpdx(ddx_e) + dpdy(ddy_e)) * 200.0, -1.0, 1.0);
+    // Curvature accent (derivatives computed above in uniform control flow)
     let ridge_light = max(0.0, curvature) * 0.35;
     let valley_dark = max(0.0, -curvature) * 0.4;
     color *= (1.0 + ridge_light - valley_dark);

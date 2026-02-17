@@ -89,11 +89,12 @@ export function getViewProjection(
   return multiply(proj, view);
 }
 
-/** Raycast from screen pixel to the Y=0 ground plane. Returns world (x, z) or null. */
+/** Raycast from screen pixel to a horizontal plane at Y=planeY. Returns world (x, z) or null. */
 export function screenToGround(
   mouseX: number, mouseY: number,
   screenW: number, screenH: number,
   cam: OrbitalCamera, fov: number, aspect: number,
+  planeY: number = 0,
 ): { x: number; z: number } | null {
   const ndcX = (2 * mouseX / screenW) - 1;
   const ndcY = 1 - (2 * mouseY / screenH);
@@ -121,7 +122,7 @@ export function screenToGround(
   const dirZ = rz * rvX + uz * rvY - bz;
 
   if (Math.abs(dirY) < 1e-6) return null;
-  const t = -eye[1] / dirY;
+  const t = (planeY - eye[1]) / dirY;
   if (t < 0) return null;
 
   return { x: eye[0] + t * dirX, z: eye[2] + t * dirZ };
