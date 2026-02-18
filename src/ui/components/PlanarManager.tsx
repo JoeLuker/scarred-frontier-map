@@ -93,6 +93,34 @@ export const PlanarManager: React.FC<PlanarManagerProps> = ({
                 />
               </div>
 
+              <div className="space-y-1">
+                <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
+                  <span>Intensity</span>
+                  <span>{Math.round(overlay.intensity * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0" max="1" step="0.01"
+                  value={overlay.intensity}
+                  onChange={(e) => onModify({ ...overlay, intensity: parseFloat(e.target.value) })}
+                  className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
+                  <span>Falloff</span>
+                  <span>{overlay.falloff.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.5" max="6" step="0.1"
+                  value={overlay.falloff}
+                  onChange={(e) => onModify({ ...overlay, falloff: parseFloat(e.target.value) })}
+                  className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
+                />
+              </div>
+
               <div className="flex justify-between text-[10px] text-slate-500">
                 <span>POS: {Math.round(overlay.coordinates.q)}, {Math.round(overlay.coordinates.r)}</span>
                 <div className="flex items-center gap-1 text-sky-400">

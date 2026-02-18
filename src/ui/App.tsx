@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { PlanarAlignment, HexData, WorldGenConfig } from '../core/types';
+import { PLANAR_DEFAULTS } from '../core/config';
 import { HexGrid } from './components/HexGrid';
 import { CurrentHex } from './components/CurrentHex';
 import { WorldGenBar } from './components/WorldGenBar';
@@ -60,11 +61,14 @@ const App: React.FC = () => {
 
   const handleAddPlane = useCallback((type: PlanarAlignment) => {
     const center = focusedHex ? focusedHex.coordinates : { q: 0, r: 0 };
+    const defaults = PLANAR_DEFAULTS[type];
     addOverlay({
       id: `PLANE-${Date.now()}`,
       type,
       coordinates: center,
-      radius: 5,
+      radius: defaults.radius,
+      intensity: defaults.intensity,
+      falloff: defaults.falloff,
     });
   }, [focusedHex, addOverlay]);
 

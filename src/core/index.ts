@@ -18,7 +18,7 @@ export {
 } from './types';
 
 // Config
-export { WORLD, DEFAULT_WORLD_CONFIG, TERRAIN, BIOME, NOISE, RENDER, MESH } from './config';
+export { WORLD, DEFAULT_WORLD_CONFIG, TERRAIN, BIOME, NOISE, RENDER, MESH, PLANAR_DEFAULTS } from './config';
 
 // World generation (geometry only — terrain sampling is GPU)
 export { generateWorldGrid, mergeTerrain } from './world';

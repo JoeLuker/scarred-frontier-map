@@ -106,11 +106,27 @@ fn vs_main(in: VertexIn) -> VertexOut {
     y += block * vt_pi * 0.015 * hs;
 
   } else if (vt_plane == 4u) {
-    // AIR: erosion/smoothing — reduce extreme heights, gentle curves.
-    // Pull everything toward the median elevation.
+    // AIR: two-phase system — smoothing at low intensity, floating islands at high.
     let median_y = displacement_curve(0.35) * hs;
-    y = mix(y, median_y, vt_pi * 0.3);
-    y += value_noise(in.pos_xz * 0.025) * vt_pi * 0.003 * hs;
+    let smooth_t = saturate(vt_pi / 0.4);
+    let lift_t = saturate((vt_pi - 0.3) / 0.5);
+
+    // Smoothing (fades as lift takes over)
+    y = mix(y, median_y, smooth_t * 0.3 * (1.0 - lift_t * 0.5));
+
+    // Floating island selection (noise-driven chunks)
+    let chunk = fbm3(in.pos_xz * 0.008) * 0.7 + value_noise(in.pos_xz * 0.03) * 0.3;
+    let threshold = mix(0.75, 0.15, lift_t);
+    let is_floating = smoothstep(threshold - 0.05, threshold + 0.05, chunk);
+
+    // Lift height: scales with intensity, varies per chunk
+    let base_lift = 0.08 * hs;
+    let max_lift = 0.25 * hs;
+    let variation = 0.6 + value_noise(in.pos_xz * 0.015 + vec2f(42.0, 13.0)) * 0.8;
+    y += mix(base_lift, max_lift, lift_t) * is_floating * variation;
+
+    // Micro-displacement on floating chunks
+    y += is_floating * value_noise(in.pos_xz * 0.025) * vt_pi * 0.003 * hs;
 
   } else if (vt_plane == 5u) {
     // POSITIVE: gentle growth uplift
@@ -388,23 +404,37 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     pm.specular_mod = mix(1.0, 0.4, pi);
 
   } else if (plane_type == 4u) {
-    // ── AIR: Wind erosion / ethereal ──
-    // Terrain is scoured smooth. Bleached, wind-worn surfaces.
-    // High areas are cloud-white, low areas are sandy dust.
+    // ── AIR: Wind erosion + floating islands ──
+    // Low intensity: wind-scoured, bleached surfaces.
+    // High intensity: floating chunks get sky-blue ethereal tint + glow.
     let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
     pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
 
-    let dust = vec3f(0.72, 0.68, 0.58);     // wind-scoured lowland
-    let cloud_white = vec3f(0.88, 0.90, 0.95); // ethereal highland
-    let surface = mix(dust, cloud_white, is_high);
-    pm.replace_color = surface;
-    pm.replace_strength = pi * 0.6;
+    // Recompute chunk noise (must match vertex shader exactly)
+    let lift_t = saturate((pi - 0.3) / 0.5);
+    let chunk = fbm3(wn * 0.008) * 0.7 + value_noise(wn * 0.03) * 0.3;
+    let threshold = mix(0.75, 0.15, lift_t);
+    let is_floating = smoothstep(threshold - 0.05, threshold + 0.05, chunk);
 
-    pm.roughness_mod = -0.25 * pi;     // wind-polished
-    pm.snow_line_shift = -0.2 * pi;    // wind deposits snow lower
-    pm.ambient_mod = 1.0 + 0.35 * pi;  // bright open sky
-    pm.shadow_mod = mix(1.0, 0.6, pi); // soft diffuse shadows
-    pm.specular_mod = 1.0 + 0.3 * pi;
+    // Base: dust lowland / cloud-white highland
+    let dust = vec3f(0.72, 0.68, 0.58);
+    let cloud_white = vec3f(0.88, 0.90, 0.95);
+    let base_surface = mix(dust, cloud_white, is_high);
+
+    // Floating chunks: sky-blue ethereal tint
+    let sky_tint = vec3f(0.75, 0.85, 0.98);
+    let surface = mix(base_surface, sky_tint, is_floating * lift_t);
+    pm.replace_color = surface;
+    pm.replace_strength = pi * (0.6 + is_floating * lift_t * 0.3);
+
+    // Ethereal glow on floating chunks
+    pm.emission = vec3f(0.3, 0.5, 0.8) * is_floating * lift_t * 0.15;
+
+    pm.roughness_mod = -0.25 * pi;
+    pm.snow_line_shift = -0.2 * pi;
+    pm.ambient_mod = 1.0 + (0.35 + is_floating * lift_t * 0.25) * pi;
+    pm.shadow_mod = mix(1.0, mix(0.6, 0.4, is_floating * lift_t), pi);
+    pm.specular_mod = 1.0 + (0.3 + is_floating * lift_t * 0.4) * pi;
 
   } else if (plane_type == 5u) {
     // ── POSITIVE: Life / radiance ──

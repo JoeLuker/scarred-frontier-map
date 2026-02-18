@@ -215,6 +215,30 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
                           onPointerUp={() => onCommitOverlay()}
                           className="w-full h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
                         />
+                        <div className="flex justify-between text-[9px] text-slate-500 uppercase font-bold">
+                          <span>Intensity</span>
+                          <span>{Math.round(overlay.intensity * 100)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0" max="1" step="0.01"
+                          value={overlay.intensity}
+                          onChange={(e) => onModifyOverlay({ ...overlay, intensity: parseFloat(e.target.value) })}
+                          onPointerUp={() => onCommitOverlay()}
+                          className="w-full h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
+                        />
+                        <div className="flex justify-between text-[9px] text-slate-500 uppercase font-bold">
+                          <span>Falloff</span>
+                          <span>{overlay.falloff.toFixed(1)}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.5" max="6" step="0.1"
+                          value={overlay.falloff}
+                          onChange={(e) => onModifyOverlay({ ...overlay, falloff: parseFloat(e.target.value) })}
+                          onPointerUp={() => onCommitOverlay()}
+                          className="w-full h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
+                        />
                         <div className="flex items-center gap-1 text-[9px] text-slate-600">
                           <Move size={8} />
                           <span>({Math.round(overlay.coordinates.q)}, {Math.round(overlay.coordinates.r)}) — drag on map</span>

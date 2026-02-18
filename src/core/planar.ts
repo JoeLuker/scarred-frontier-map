@@ -223,7 +223,10 @@ export const computeHexState = (hex: HexData, overlays: readonly PlanarOverlay[]
 
     if (dist <= effectiveRadius) {
       const normalizedDist = dist / (effectiveRadius + NOISE.INTENSITY_EPSILON);
-      const intensity = Math.max(0, 1.0 - normalizedDist * normalizedDist * normalizedDist);
+      const overlayFalloff = overlay.falloff ?? 3.0;
+      const overlayIntensity = overlay.intensity ?? 1.0;
+      const rawIntensity = Math.max(0, 1.0 - Math.pow(normalizedDist, overlayFalloff));
+      const intensity = rawIntensity * overlayIntensity;
 
       if (intensity > 0) {
         influences.push({ type: overlay.type, intensity });

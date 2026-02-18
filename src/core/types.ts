@@ -50,6 +50,8 @@ export interface PlanarOverlay {
   readonly type: PlanarAlignment;
   coordinates: AxialCoord;
   radius: number;
+  intensity: number;  // 0-1, scales max per-hex intensity
+  falloff: number;    // exponent for distance curve (0.5=gradual, 6=sharp)
 }
 
 export interface PlanarInfluence {

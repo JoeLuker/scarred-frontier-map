@@ -1,5 +1,5 @@
 import { HexData, WorldGenConfig, PlanarOverlay, PlanarAlignment, HistoryAction, WorldState, TerrainType, TerrainElement, AxialCoord } from './types';
-import { DEFAULT_WORLD_CONFIG, WORLD } from './config';
+import { DEFAULT_WORLD_CONFIG, WORLD, PLANAR_DEFAULTS } from './config';
 import { applyAction, EMPTY_STATE } from './history';
 import { generateWorldGrid, mergeTerrain } from './world';
 import { applyOverlaysToMap } from './planar';
@@ -56,11 +56,14 @@ export class WorldEngine {
     const results = await provider.generate(config, grid.length);
     const hexes = mergeTerrain(grid, results);
 
+    const positiveDefaults = PLANAR_DEFAULTS[PlanarAlignment.POSITIVE];
     const defaultOverlay: PlanarOverlay = {
       id: 'PLANE-default',
       type: PlanarAlignment.POSITIVE,
       coordinates: { q: 0, r: 0 },
       radius: WORLD.GRID_RADIUS,
+      intensity: positiveDefaults.intensity,
+      falloff: positiveDefaults.falloff,
     };
     const overlays = [defaultOverlay];
     const hexesWithOverlay = applyOverlaysToMap(hexes, overlays);

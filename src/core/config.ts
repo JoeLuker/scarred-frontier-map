@@ -32,6 +32,21 @@ export const DEFAULT_WORLD_CONFIG: WorldGenConfig = {
   verticality: 0.8,
 };
 
+export const PLANAR_DEFAULTS: Record<PlanarAlignment, {
+  readonly intensity: number;
+  readonly falloff: number;
+  readonly radius: number;
+}> = {
+  [PlanarAlignment.MATERIAL]:  { intensity: 1.0, falloff: 3.0, radius: 5 },
+  [PlanarAlignment.FIRE]:      { intensity: 0.9, falloff: 4.0, radius: 5 },
+  [PlanarAlignment.WATER]:     { intensity: 0.7, falloff: 1.5, radius: 8 },
+  [PlanarAlignment.AIR]:       { intensity: 0.6, falloff: 1.0, radius: 10 },
+  [PlanarAlignment.EARTH]:     { intensity: 0.8, falloff: 3.0, radius: 6 },
+  [PlanarAlignment.POSITIVE]:  { intensity: 0.7, falloff: 2.0, radius: 7 },
+  [PlanarAlignment.NEGATIVE]:  { intensity: 0.8, falloff: 2.5, radius: 6 },
+  [PlanarAlignment.SCAR]:      { intensity: 1.0, falloff: 5.0, radius: 4 },
+};
+
 // --- Continuous Terrain Field (world-space coordinates) ---
 // Scales calibrated for pixel coordinates: old hex-space values ÷ (√3 × HEX_SIZE ≈ 86.6)
 
