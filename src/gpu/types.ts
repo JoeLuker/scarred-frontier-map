@@ -67,6 +67,14 @@ export function flavorFromId(id: number): string {
   return FLAVOR_TABLE[id] ?? 'Wilderness';
 }
 
+// --- Per-object shader flags (scene graph) ---
+// Bit flags passed via ObjectConfig uniform to differentiate render behavior.
+export const OBJECT_FLAGS = {
+  IS_TERRAIN: 0x01,
+  IS_SEA: 0x02,
+  IS_ISLAND_LAYER: 0x04,
+} as const;
+
 // --- GPU context ---
 
 export interface GpuContext {

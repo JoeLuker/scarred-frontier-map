@@ -1,10 +1,10 @@
-import { MESH_VERTEX_BYTE_STRIDE } from './types';
+import { MESH_VERTEX_BYTE_STRIDE, OBJECT_FLAGS } from './types';
 import type { TerrainMesh } from './terrain-mesh';
 import type { HexStateTexture } from './hex-state-texture';
 
 // --- WGSL Shader (terrain) ---
 
-function createShader(): string {
+export function createTerrainShader(): string {
   return /* wgsl */ `
 
 // ============================================================
@@ -33,6 +33,17 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var hex_state_tex: texture_2d<f32>;
+
+// Per-object configuration (scene graph — identity model for terrain/sea)
+struct ObjectConfig {
+  model: mat4x4f,   // 64 bytes — world transform
+  flags: u32,       // 4 bytes  — bit 0: IS_TERRAIN, bit 1: IS_SEA, bit 2: IS_ISLAND_LAYER
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,       // total: 80 bytes (16-byte aligned)
+}
+
+@group(1) @binding(0) var<uniform> obj: ObjectConfig;
 
 // ============================================================
 // LAYER 1: Geometry (Vertex Shader)
@@ -149,7 +160,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
   let edge_fade = smoothstep(u.grid_radius - 3.0, u.grid_radius, vt_hex_dist);
   y *= (1.0 - edge_fade);
 
-  let world = vec3f(in.pos_xz.x, y, in.pos_xz.y);
+  let local = vec4f(in.pos_xz.x, y, in.pos_xz.y, 1.0);
+  let world = (obj.model * local).xyz;
   let clip = u.view_proj * vec4f(world, 1.0);
 
   var out: VertexOut;
@@ -833,7 +845,7 @@ fn fs_sky(in: SkyVaryings) -> SkyFragOut {
 
 // --- 4x4 matrix inverse (cofactor expansion) ---
 
-function invertMat4(m: Float32Array): Float32Array {
+export function invertMat4(m: Float32Array): Float32Array {
   const out = new Float32Array(16);
   const m00 = m[0]!, m01 = m[1]!, m02 = m[2]!, m03 = m[3]!;
   const m10 = m[4]!, m11 = m[5]!, m12 = m[6]!, m13 = m[7]!;
@@ -881,6 +893,9 @@ function invertMat4(m: Float32Array): Float32Array {
 // 304 (original) + 64 (inv_view_proj mat4x4f) = 368
 const UNIFORM_SIZE = 368;
 const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus-stencil8';
+const OBJECT_UNIFORM_SLOT = 256; // minUniformBufferOffsetAlignment
+const OBJECT_CONFIG_SIZE = 80;   // mat4x4f + u32 + 3×u32 padding
+const IDENTITY_4X4 = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
 
 export class TerrainRenderer {
   private device: GPUDevice;
@@ -901,6 +916,11 @@ export class TerrainRenderer {
   // Sea quad drawn through the terrain pipeline — same shader, no z-fighting
   private seaVertexBuffer: GPUBuffer;
 
+  // Per-object uniform buffer (dynamic offset per draw call)
+  private objectGroupLayout: GPUBindGroupLayout;
+  private objectUniformBuffer: GPUBuffer;
+  private objectBindGroup: GPUBindGroup;
+
   // Dummy texture for initial bind group
   private dummyHexTexture: GPUTexture;
 
@@ -915,6 +935,9 @@ export class TerrainRenderer {
     format: GPUTextureFormat,
     seaVertexBuffer: GPUBuffer,
     dummyHexTexture: GPUTexture,
+    objectGroupLayout: GPUBindGroupLayout,
+    objectUniformBuffer: GPUBuffer,
+    objectBindGroup: GPUBindGroup,
   ) {
     this.device = device;
     this.context = context;
@@ -926,6 +949,9 @@ export class TerrainRenderer {
     this.format = format;
     this.seaVertexBuffer = seaVertexBuffer;
     this.dummyHexTexture = dummyHexTexture;
+    this.objectGroupLayout = objectGroupLayout;
+    this.objectUniformBuffer = objectUniformBuffer;
+    this.objectBindGroup = objectBindGroup;
   }
 
   static create(device: GPUDevice, canvas: HTMLCanvasElement): TerrainRenderer {
@@ -935,7 +961,7 @@ export class TerrainRenderer {
 
     context.configure({ device, format, alphaMode: 'opaque' });
 
-    const shaderModule = device.createShaderModule({ code: createShader() });
+    const shaderModule = device.createShaderModule({ code: createTerrainShader() });
 
     const uniformBuffer = device.createBuffer({
       size: UNIFORM_SIZE,
@@ -957,10 +983,20 @@ export class TerrainRenderer {
       ],
     });
 
-    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+    const objectGroupLayout = device.createBindGroupLayout({
+      entries: [{
+        binding: 0,
+        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+        buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: OBJECT_CONFIG_SIZE },
+      }],
+    });
+
+    // Sky only references @group(0); terrain/sea also reference @group(1) for ObjectConfig
+    const skyPipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+    const terrainPipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout, objectGroupLayout] });
 
     const pipeline = device.createRenderPipeline({
-      layout: pipelineLayout,
+      layout: terrainPipelineLayout,
       vertex: {
         module: shaderModule,
         entryPoint: 'vs_main',
@@ -996,9 +1032,9 @@ export class TerrainRenderer {
       },
     });
 
-    // --- Sky pipeline (draws behind everything) ---
+    // --- Sky pipeline (draws behind everything, no group 1) ---
     const skyPipeline = device.createRenderPipeline({
-      layout: pipelineLayout,
+      layout: skyPipelineLayout,
       vertex: {
         module: shaderModule,
         entryPoint: 'vs_sky',
@@ -1023,7 +1059,7 @@ export class TerrainRenderer {
 
     // --- Sea pipeline (stencil-masked — only draws where terrain didn't render) ---
     const seaPipeline = device.createRenderPipeline({
-      layout: pipelineLayout,
+      layout: terrainPipelineLayout,
       vertex: {
         module: shaderModule,
         entryPoint: 'vs_main',
@@ -1093,9 +1129,34 @@ export class TerrainRenderer {
       [1, 1],
     );
 
+    // --- Per-object uniform buffer (2 slots: terrain + sea) ---
+    const objectUniformBuffer = device.createBuffer({
+      size: OBJECT_UNIFORM_SLOT * 2,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    // Initialize slots with identity matrix + flags
+    const objectData = new ArrayBuffer(OBJECT_UNIFORM_SLOT * 2);
+    // Slot 0: terrain
+    new Float32Array(objectData, 0, 16).set(IDENTITY_4X4);
+    new Uint32Array(objectData, 64, 1)[0] = OBJECT_FLAGS.IS_TERRAIN;
+    // Slot 1: sea
+    new Float32Array(objectData, OBJECT_UNIFORM_SLOT, 16).set(IDENTITY_4X4);
+    new Uint32Array(objectData, OBJECT_UNIFORM_SLOT + 64, 1)[0] = OBJECT_FLAGS.IS_SEA;
+    device.queue.writeBuffer(objectUniformBuffer, 0, new Uint8Array(objectData));
+
+    const objectBindGroup = device.createBindGroup({
+      layout: objectGroupLayout,
+      entries: [{
+        binding: 0,
+        resource: { buffer: objectUniformBuffer, size: OBJECT_CONFIG_SIZE },
+      }],
+    });
+
     return new TerrainRenderer(
       device, context, pipeline, skyPipeline, seaPipeline, uniformBuffer,
       bindGroupLayout, format, seaVertexBuffer, dummyHexTexture,
+      objectGroupLayout, objectUniformBuffer, objectBindGroup,
     );
   }
 
@@ -1219,6 +1280,7 @@ export class TerrainRenderer {
     // 2. Terrain mesh (writes stencil=1 everywhere it renders)
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
+    pass.setBindGroup(1, this.objectBindGroup, [0]); // slot 0: terrain
     pass.setStencilReference(1);
     pass.setVertexBuffer(0, this.currentMesh.vertexBuffer);
     pass.setIndexBuffer(this.currentMesh.indexBuffer, 'uint32');
@@ -1227,6 +1289,7 @@ export class TerrainRenderer {
     // 3. Sea quad (stencil-masked — only fills gaps where terrain didn't render)
     pass.setPipeline(this.seaPipeline);
     pass.setBindGroup(0, this.bindGroup);
+    pass.setBindGroup(1, this.objectBindGroup, [OBJECT_UNIFORM_SLOT]); // slot 1: sea
     pass.setStencilReference(0);
     pass.setVertexBuffer(0, this.seaVertexBuffer);
     pass.draw(6);
@@ -1246,6 +1309,7 @@ export class TerrainRenderer {
 
   destroy(): void {
     this.uniformBuffer.destroy();
+    this.objectUniformBuffer.destroy();
     this.seaVertexBuffer.destroy();
     this.depthTexture?.destroy();
     this.dummyHexTexture.destroy();
