@@ -7,7 +7,11 @@ import { hexToRgb } from './renderUtils';
 import { useCamera } from '../hooks/useCamera';
 import {
   initWebGPU,
-  TerrainRenderer,
+  Scene,
+  createTerrainShader,
+  createTerrainMaterial,
+  createSeaMaterial,
+  createSkyMaterial,
   TerrainMesh,
   buildTerrainMesh,
   computeDisplacedY,
@@ -17,6 +21,7 @@ import {
   getEyePosition,
   screenToGround,
   TERRAIN_ORDER,
+  OBJECT_FLAGS,
 } from '../../gpu';
 
 // ===================================================================
@@ -80,10 +85,11 @@ export const HexGrid: React.FC<HexGridProps> = ({
   const draggingOverlayIdRef = useRef<string | null>(null);
 
   // GPU resources
-  const rendererRef = useRef<TerrainRenderer | null>(null);
+  const sceneRef = useRef<Scene | null>(null);
   const meshRef = useRef<TerrainMesh | null>(null);
   const hexStateRef = useRef<HexStateTexture | null>(null);
   const meshComputeRef = useRef<MeshCompute | null>(null);
+  const seaBufferRef = useRef<GPUBuffer | null>(null);
 
   // Track what mesh was built for (to know when to rebuild)
   const meshConfigRef = useRef<WorldGenConfig | null>(null);
@@ -132,20 +138,61 @@ export const HexGrid: React.FC<HexGridProps> = ({
       const ctx = await initWebGPU();
       if (cancelled || !ctx || !gpuCanvasRef.current) return;
       try {
-        const renderer = TerrainRenderer.create(ctx.device, gpuCanvasRef.current);
-        const mesh = TerrainMesh.create(ctx.device, 250000);
-        const hexState = HexStateTexture.create(ctx.device, WORLD.GRID_RADIUS);
-        const mc = MeshCompute.create(ctx.device, 250000);
+        const { device } = ctx;
+        const scene = Scene.create(device, gpuCanvasRef.current);
+        const mesh = TerrainMesh.create(device, 250000);
+        const hexState = HexStateTexture.create(device, WORLD.GRID_RADIUS);
+        const mc = MeshCompute.create(device, 250000);
 
-        rendererRef.current = renderer;
+        // Create shader + materials
+        const shader = device.createShaderModule({ code: createTerrainShader() });
+        const terrainMat = createTerrainMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
+        const seaMat = createSeaMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
+        const skyMat = createSkyMaterial(device, shader, scene.format, scene.group0Layout);
+
+        // Sea quad vertex buffer (7 floats/vert: pos_xz, elevation, moisture, normal)
+        const SEA_EXTENT = 100000;
+        const seaVerts = new Float32Array([
+          -SEA_EXTENT, -SEA_EXTENT, 0, 0, 0, 1, 0,
+           SEA_EXTENT, -SEA_EXTENT, 0, 0, 0, 1, 0,
+          -SEA_EXTENT,  SEA_EXTENT, 0, 0, 0, 1, 0,
+          -SEA_EXTENT,  SEA_EXTENT, 0, 0, 0, 1, 0,
+           SEA_EXTENT, -SEA_EXTENT, 0, 0, 0, 1, 0,
+           SEA_EXTENT,  SEA_EXTENT, 0, 0, 0, 1, 0,
+        ]);
+        const seaBuffer = device.createBuffer({
+          size: seaVerts.byteLength,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(seaBuffer, 0, seaVerts);
+
+        // Set hex state texture (stable reference — data updates via writeTexture)
+        scene.setHexStateTexture(hexState.texture);
+
+        // Register scene objects
+        scene.addObject('sky', { material: skyMat, drawCount: 3, renderOrder: 0 });
+        scene.addObject('terrain', {
+          material: terrainMat,
+          mesh,
+          flags: OBJECT_FLAGS.IS_TERRAIN,
+          stencilRef: 1,
+          renderOrder: 1,
+        });
+        scene.addObject('sea', {
+          material: seaMat,
+          mesh: { vertexBuffer: seaBuffer, vertexCount: 6 },
+          flags: OBJECT_FLAGS.IS_SEA,
+          stencilRef: 0,
+          renderOrder: 2,
+        });
+
+        sceneRef.current = scene;
         meshRef.current = mesh;
         hexStateRef.current = hexState;
         meshComputeRef.current = mc;
+        seaBufferRef.current = seaBuffer;
 
-        renderer.setMesh(mesh);
-        renderer.setHexState(hexState);
-
-        // Build initial mesh + hex state (effects may have already fired and missed the null refs)
+        // Build initial mesh + hex state
         const cfg = worldConfigRef.current;
         const buffers = await buildTerrainMesh(mc, cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING);
         if (cancelled) return;
@@ -155,21 +202,23 @@ export const HexGrid: React.FC<HexGridProps> = ({
         hexState.update(hexesRef.current);
         hexStateSourceRef.current = hexesRef.current;
 
-        console.log(`WebGPU terrain renderer initialized (${buffers.vertexCount} verts, ${buffers.indexCount / 3} tris)`);
+        console.log(`Scene graph initialized (${buffers.vertexCount} verts, ${buffers.indexCount / 3} tris)`);
       } catch (err) {
-        console.warn('WebGPU renderer init failed:', err);
+        console.warn('Scene init failed:', err);
       }
     })();
     return () => {
       cancelled = true;
-      rendererRef.current?.destroy();
-      rendererRef.current = null;
+      sceneRef.current?.destroy();
+      sceneRef.current = null;
       meshRef.current?.destroy();
       meshRef.current = null;
       hexStateRef.current?.destroy();
       hexStateRef.current = null;
       meshComputeRef.current?.destroy();
       meshComputeRef.current = null;
+      seaBufferRef.current?.destroy();
+      seaBufferRef.current = null;
     };
   }, []);
 
@@ -344,11 +393,11 @@ export const HexGrid: React.FC<HexGridProps> = ({
   // ===================================================================
 
   const renderGpu = useCallback(() => {
-    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
     const canvas = canvasRef.current;
     const gpuCanvas = gpuCanvasRef.current;
     const container = containerRef.current;
-    if (!renderer || !canvas || !gpuCanvas || !container) return;
+    if (!scene || !canvas || !gpuCanvas || !container) return;
 
     // --- FPS tracking ---
     const fpsState = fpsRef.current;
@@ -372,7 +421,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
     if (gpuCanvas.width !== pixW || gpuCanvas.height !== pixH) {
       gpuCanvas.width = pixW;
       gpuCanvas.height = pixH;
-      renderer.reconfigure();
+      scene.reconfigure();
     }
     if (canvas.width !== pixW || canvas.height !== pixH) {
       canvas.width = pixW;
@@ -397,7 +446,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
     const eyePos = getEyePosition(cam);
 
-    renderer.updateUniforms(
+    scene.updateFrameUniforms(
       viewProj,
       heightScale,
       WORLD.HEX_SIZE,
@@ -413,7 +462,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
       eyePos,
     );
 
-    renderer.render();
+    scene.render();
 
     // --- Canvas 2D overlay ---
     const ctx = canvas.getContext('2d');
@@ -484,7 +533,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
   useEffect(() => {
     const loop = () => {
-      if (rendererRef.current) {
+      if (sceneRef.current) {
         renderGpu();
       }
       animationRef.current = requestAnimationFrame(loop);
