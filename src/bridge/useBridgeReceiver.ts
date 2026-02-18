@@ -18,10 +18,8 @@ function commandToActions(cmd: MapCommand, hexes: HexData[]): HistoryAction[] {
       return [{ type: 'importMap', hexes: cmd.hexes }];
     case 'generateWorld': {
       const config: WorldGenConfig = { ...DEFAULT_WORLD_CONFIG, ...cmd.config };
-      return [{ type: 'worldConfig', config, preserveExplored: cmd.preserveExplored ?? false }];
+      return [{ type: 'worldConfig', config }];
     }
-    case 'revealAll':
-      return [{ type: 'revealAll' }];
     case 'addOverlay':
       return [{ type: 'addOverlay', overlay: cmd.overlay }];
     case 'removeOverlay':
@@ -41,11 +39,9 @@ function commandToActions(cmd: MapCommand, hexes: HexData[]): HistoryAction[] {
 }
 
 function reportState(hexes: HexData[], overlays: PlanarOverlay[]): void {
-  const explored = hexes.filter((h) => h.isExplored);
   const payload = JSON.stringify({
     hexCount: hexes.length,
-    exploredCount: explored.length,
-    hexes: explored,
+    hexes,
     overlays,
   });
 

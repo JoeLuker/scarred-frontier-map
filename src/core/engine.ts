@@ -1,5 +1,5 @@
-import { HexData, WorldGenConfig, PlanarOverlay, HistoryAction, WorldState, TerrainType, TerrainElement, AxialCoord } from './types';
-import { DEFAULT_WORLD_CONFIG } from './config';
+import { HexData, WorldGenConfig, PlanarOverlay, PlanarAlignment, HistoryAction, WorldState, TerrainType, TerrainElement, AxialCoord } from './types';
+import { DEFAULT_WORLD_CONFIG, WORLD } from './config';
 import { applyAction, EMPTY_STATE } from './history';
 import { generateWorldGrid, mergeTerrain } from './world';
 import { applyOverlaysToMap } from './planar';
@@ -56,8 +56,17 @@ export class WorldEngine {
     const results = await provider.generate(config, grid.length);
     const hexes = mergeTerrain(grid, results);
 
+    const defaultOverlay: PlanarOverlay = {
+      id: 'PLANE-default',
+      type: PlanarAlignment.POSITIVE,
+      coordinates: { q: 0, r: 0 },
+      radius: WORLD.GRID_RADIUS,
+    };
+    const overlays = [defaultOverlay];
+    const hexesWithOverlay = applyOverlaysToMap(hexes, overlays);
+
     const action: HistoryAction = { type: 'generateWorld', config };
-    const state: WorldState = { hexes, overlays: [], config };
+    const state: WorldState = { hexes: hexesWithOverlay, overlays, config };
     return new WorldEngine(provider, [action], [state], []);
   }
 
@@ -89,7 +98,6 @@ export class WorldEngine {
   private async _regenTerrain(
     state: WorldState,
     config: WorldGenConfig,
-    preserveExplored: boolean,
   ): Promise<WorldState> {
     const currentHexes = state.hexes;
 
@@ -98,7 +106,6 @@ export class WorldEngine {
     const results = await this._provider.generate(config, currentHexes.length);
 
     const newHexes = currentHexes.map((hex, i) => {
-      if (preserveExplored && hex.isExplored) return { ...hex };
       const r = results[i]!;
       return {
         ...hex,
@@ -126,7 +133,7 @@ export class WorldEngine {
       case 'generateWorld':
         return this._generateWorld(action.config);
       case 'worldConfig':
-        return this._regenTerrain(state, action.config, action.preserveExplored);
+        return this._regenTerrain(state, action.config);
       default:
         return applyAction(state, action);
     }
@@ -259,20 +266,12 @@ export class WorldEngine {
     await this.dispatch({ type: 'modifyOverlay', overlay });
   }
 
-  async revealSector(groupId: string): Promise<void> {
-    await this.dispatch({ type: 'revealSector', groupId });
-  }
-
-  async revealAll(): Promise<void> {
-    await this.dispatch({ type: 'revealAll' });
-  }
-
   async updateHex(hexId: string, changes: Partial<HexData>): Promise<void> {
     await this.dispatch({ type: 'updateHex', hexId, changes });
   }
 
-  async setWorldConfig(config: WorldGenConfig, preserveExplored: boolean): Promise<void> {
-    await this.dispatch({ type: 'worldConfig', config, preserveExplored });
+  async setWorldConfig(config: WorldGenConfig): Promise<void> {
+    await this.dispatch({ type: 'worldConfig', config });
   }
 
   async importMap(hexes: HexData[]): Promise<void> {

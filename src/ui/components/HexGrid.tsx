@@ -371,7 +371,6 @@ export const HexGrid: React.FC<HexGridProps> = ({
       moistureForest,
       moistureMarsh,
       MESH.HEX_GRID_OPACITY,
-      MESH.FOG_MIX,
       GPU_TERRAIN_COLORS,
       eyePos,
     );
@@ -401,19 +400,9 @@ export const HexGrid: React.FC<HexGridProps> = ({
           const radius = Math.max(4, 600 / cam.distance * WORLD.HEX_SIZE);
           ctx.beginPath();
           ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
-          ctx.strokeStyle = hovered.isExplored
-            ? 'rgba(255, 255, 255, 0.8)'
-            : '#fbbf24';
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
           ctx.lineWidth = 2;
           ctx.stroke();
-
-          if (!hovered.isExplored) {
-            ctx.fillStyle = '#fbbf24';
-            ctx.font = `bold ${Math.max(10, radius * 0.6)}px sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('REVEAL', screen.x, screen.y);
-          }
         }
       }
     }

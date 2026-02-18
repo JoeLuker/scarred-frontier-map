@@ -30,7 +30,6 @@ const App: React.FC = () => {
     focusRegion,
     importMap,
     handleHexClick,
-    revealAll,
     addOverlay,
     removeOverlay,
   } = useWorldState();
@@ -44,8 +43,8 @@ const App: React.FC = () => {
     setIsGenBarOpen(true);
   }, []);
 
-  const handleCheckpoint = useCallback((config: WorldGenConfig, preserveExplored: boolean) => {
-    dispatch({ type: 'worldConfig', config, preserveExplored });
+  const handleCheckpoint = useCallback((config: WorldGenConfig) => {
+    dispatch({ type: 'worldConfig', config });
   }, [dispatch]);
 
   const handleCancelGenBar = useCallback(() => {
@@ -130,7 +129,6 @@ const App: React.FC = () => {
             isGenBarOpen={isGenBarOpen}
             onExport={handleExport}
             onImport={handleImport}
-            onRevealAll={revealAll}
             onUndo={undo}
             onRedo={redo}
             canUndo={canUndo}

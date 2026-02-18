@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { HexData, PlanarOverlay, PlanarAlignment, HistoryAction } from '../../core/types';
 import { getActionLabel } from '../../core/history';
 import { PLANAR_COLORS } from '../theme';
-import { Map as MapIcon, ChevronRight, ChevronUp, ChevronDown, Upload, Download, Eye, RotateCcw, RotateCw, Trash2, Plus, Move, Clock } from 'lucide-react';
+import { WORLD } from '../../core/config';
+import { Map as MapIcon, ChevronRight, ChevronUp, ChevronDown, Upload, Download, RotateCcw, RotateCw, Trash2, Plus, Move, Clock } from 'lucide-react';
 
 const AVAILABLE_PLANES = [
   PlanarAlignment.FIRE,
@@ -21,7 +22,6 @@ interface WorldSidebarProps {
   isGenBarOpen: boolean;
   onExport: () => void;
   onImport: () => void;
-  onRevealAll: () => void;
   onUndo: () => void;
   onRedo: () => void;
   canUndo: boolean;
@@ -42,7 +42,6 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
   isGenBarOpen,
   onExport,
   onImport,
-  onRevealAll,
   onUndo,
   onRedo,
   canUndo,
@@ -197,7 +196,7 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
                         </div>
                         <input
                           type="range"
-                          min="2" max="15" step="1"
+                          min="2" max={WORLD.GRID_RADIUS + 5} step="1"
                           value={overlay.radius}
                           onChange={(e) => onModifyOverlay({ ...overlay, radius: parseInt(e.target.value) })}
                           className="w-full h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
@@ -304,14 +303,6 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
                 <RotateCw size={14} />
               </button>
             </div>
-
-            <button
-              onClick={onRevealAll}
-              className="w-full bg-amber-950/20 hover:bg-amber-900/30 border border-amber-900/20 hover:border-amber-700/50 text-amber-600 hover:text-amber-500 text-[10px] font-bold py-2 rounded-lg flex items-center justify-center gap-2 transition-all"
-            >
-              <Eye size={14} />
-              REVEAL MAP
-            </button>
 
             <button
               onClick={onToggleGenBar}

@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { WorldGenConfig } from '../../core/types';
 import { DEFAULT_WORLD_CONFIG } from '../../core/config';
-import { RefreshCw, Lock, Unlock, Save, X, Check, ChevronDown } from 'lucide-react';
+import { RefreshCw, Save, X, Check, ChevronDown } from 'lucide-react';
 
 interface WorldGenBarProps {
   initialConfig: WorldGenConfig;
-  onPreview: (config: WorldGenConfig, preserveExplored: boolean) => void;
-  onCheckpoint: (config: WorldGenConfig, preserveExplored: boolean) => void;
+  onPreview: (config: WorldGenConfig) => void;
+  onCheckpoint: (config: WorldGenConfig) => void;
   onCancel: () => void;
   onClose: () => void;
 }
@@ -105,7 +105,6 @@ const AdvancedSection: React.FC<{
 
 export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPreview, onCheckpoint, onCancel, onClose }) => {
   const [config, setConfig] = useState<WorldGenConfig>(initialConfig);
-  const [preserveExplored, setPreserveExplored] = useState(true);
   const [isDirty, setIsDirty] = useState(false);
   const [showLandform, setShowLandform] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
@@ -114,10 +113,8 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
   // Refs for unmount auto-commit
   const isDirtyRef = useRef(false);
   const configRef = useRef(config);
-  const preserveExploredRef = useRef(preserveExplored);
   const pendingConfigRef = useRef<WorldGenConfig | null>(null);
   configRef.current = config;
-  preserveExploredRef.current = preserveExplored;
 
   useEffect(() => {
     return () => cancelAnimationFrame(rafRef.current);
@@ -133,7 +130,7 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
         const pending = pendingConfigRef.current;
         if (pending) {
           pendingConfigRef.current = null;
-          onPreview(pending, preserveExploredRef.current);
+          onPreview(pending);
         }
       });
     }
@@ -182,8 +179,8 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
     cancelAnimationFrame(rafRef.current);
     rafRef.current = 0;
     pendingConfigRef.current = null;
-    onPreview(config, preserveExplored);
-    onCheckpoint(config, preserveExplored);
+    onPreview(config);
+    onCheckpoint(config);
     setIsDirty(false);
     isDirtyRef.current = false;
   };
@@ -193,8 +190,8 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
     rafRef.current = 0;
     pendingConfigRef.current = null;
     if (isDirty) {
-      onPreview(config, preserveExplored);
-      onCheckpoint(config, preserveExplored);
+      onPreview(config);
+      onCheckpoint(config);
     }
     onClose();
   };
@@ -232,17 +229,6 @@ export const WorldGenBar: React.FC<WorldGenBarProps> = ({ initialConfig, onPrevi
           </button>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setPreserveExplored(!preserveExplored)}
-            className={`flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded transition-colors ${
-              preserveExplored
-                ? 'text-indigo-400 bg-indigo-950/30 border border-indigo-500/20'
-                : 'text-slate-500 bg-slate-800/50 border border-slate-700'
-            }`}
-          >
-            {preserveExplored ? <Lock size={10} /> : <Unlock size={10} />}
-            {preserveExplored ? 'Preserve Explored' : 'Full Regen'}
-          </button>
           <button
             onClick={handleCheckpoint}
             className={`flex items-center gap-1 text-[10px] font-bold px-3 py-1 rounded transition-colors ${

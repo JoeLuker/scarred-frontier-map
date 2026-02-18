@@ -1,5 +1,6 @@
 import React from 'react';
 import { PlanarOverlay, PlanarAlignment } from '../../core/types';
+import { WORLD } from '../../core/config';
 import { PLANAR_COLORS } from '../theme';
 import { Trash2, Move, Layers, X, GripVertical } from 'lucide-react';
 
@@ -85,7 +86,7 @@ export const PlanarManager: React.FC<PlanarManagerProps> = ({
                 </div>
                 <input
                   type="range"
-                  min="2" max="15" step="1"
+                  min="2" max={WORLD.GRID_RADIUS + 5} step="1"
                   value={overlay.radius}
                   onChange={(e) => onModify({ ...overlay, radius: parseInt(e.target.value) })}
                   className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"

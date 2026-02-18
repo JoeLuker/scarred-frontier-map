@@ -12,7 +12,6 @@ import type { TerrainResult } from './engine';
  */
 export const generateWorldGrid = (config: WorldGenConfig): HexData[] => {
   const radius = WORLD.GRID_RADIUS;
-  const startRadius = WORLD.START_RADIUS;
   const ringWidth = WORLD.RING_WIDTH;
   const hexes: HexData[] = [];
 
@@ -20,7 +19,6 @@ export const generateWorldGrid = (config: WorldGenConfig): HexData[] => {
     const r1 = Math.max(-radius, -q - radius);
     const r2 = Math.min(radius, -q + radius);
     for (let r = r1; r <= r2; r++) {
-      const dist = (Math.abs(q) + Math.abs(q + r) + Math.abs(r)) / 2;
       const sector = getSectorID(q, r, ringWidth);
 
       hexes.push({
@@ -30,7 +28,6 @@ export const generateWorldGrid = (config: WorldGenConfig): HexData[] => {
         element: TerrainElement.STANDARD,
         elevation: 0,
         coordinates: { q, r },
-        isExplored: dist <= startRadius,
         description: '',
         baseDescription: '',
         baseTerrain: TerrainType.EMPTY,
@@ -63,19 +60,4 @@ export const mergeTerrain = (grid: HexData[], results: TerrainResult[]): HexData
       baseTerrain: r.terrain,
     };
   });
-};
-
-/** Reveal a ring group by group ID. Pure function. */
-export const revealSector = (targetGroupId: string, currentMap: readonly HexData[]): HexData[] => {
-  return currentMap.map(h => {
-    if (h.groupId === targetGroupId) {
-      return { ...h, isExplored: true };
-    }
-    return { ...h };
-  });
-};
-
-/** Reveal entire map. Pure function. */
-export const revealAll = (currentHexes: readonly HexData[]): HexData[] => {
-  return currentHexes.map(h => ({ ...h, isExplored: true }));
 };

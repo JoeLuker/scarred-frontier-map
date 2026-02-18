@@ -91,7 +91,7 @@ export const useWorldState = () => {
 
   // --- Live Preview (no history entry) ---
 
-  const previewWorldConfig = useCallback(async (config: WorldGenConfig, preserveExplored: boolean) => {
+  const previewWorldConfig = useCallback(async (config: WorldGenConfig) => {
     const eng = engineRef.current;
     if (!eng) return;
     const committed = eng.state;
@@ -105,7 +105,6 @@ export const useWorldState = () => {
     if (gen !== previewGenRef.current) return; // stale
 
     const newHexes = committed.hexes.map((hex, i) => {
-      if (preserveExplored && hex.isExplored) return { ...hex };
       const r = results[i]!;
       return {
         ...hex,
@@ -164,10 +163,6 @@ export const useWorldState = () => {
     await dispatch({ type: 'updateHex', hexId: updatedHex.id, changes: updatedHex });
   }, [dispatch]);
 
-  const revealAllHexes = useCallback(async () => {
-    await dispatch({ type: 'revealAll' });
-  }, [dispatch]);
-
   const importMap = useCallback(async (newHexes: HexData[]) => {
     await dispatch({ type: 'importMap', hexes: newHexes });
   }, [dispatch]);
@@ -183,14 +178,9 @@ export const useWorldState = () => {
     if (target) setFocusedHex(target);
   }, []);
 
-  const handleHexClick = useCallback(async (hex: HexData) => {
-    if (!hex.isExplored) {
-      if (!hex.groupId) return;
-      await dispatch({ type: 'revealSector', groupId: hex.groupId });
-      return;
-    }
+  const handleHexClick = useCallback((hex: HexData) => {
     setSelectedHexId(hex.id);
-  }, [dispatch]);
+  }, []);
 
   return {
     // State
@@ -219,7 +209,6 @@ export const useWorldState = () => {
     addOverlay,
     removeOverlay,
     updateHex,
-    revealAll: revealAllHexes,
     importMap,
 
     // UI

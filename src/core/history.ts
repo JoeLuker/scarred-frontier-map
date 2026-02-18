@@ -1,6 +1,5 @@
 import { WorldState, HistoryAction, HexData } from './types';
 import { DEFAULT_WORLD_CONFIG } from './config';
-import { revealSector, revealAll } from './world';
 import { applyOverlaysToMap } from './planar';
 
 export const EMPTY_STATE: WorldState = {
@@ -14,16 +13,6 @@ export function applyAction(state: WorldState, action: HistoryAction): WorldStat
     case 'generateWorld':
     case 'worldConfig':
       throw new Error(`${action.type} requires async dispatch through WorldEngine`);
-    case 'revealSector': {
-      const revealed = revealSector(action.groupId, state.hexes);
-      const hexes = applyOverlaysToMap(revealed, state.overlays);
-      return { hexes, overlays: state.overlays, config: state.config };
-    }
-    case 'revealAll': {
-      const revealed = revealAll(state.hexes);
-      const hexes = applyOverlaysToMap(revealed, state.overlays);
-      return { hexes, overlays: state.overlays, config: state.config };
-    }
     case 'updateHex': {
       const hexes = state.hexes.map(h =>
         h.id === action.hexId ? { ...h, ...action.changes } as HexData : h,
@@ -73,8 +62,6 @@ export function getActionLabel(action: HistoryAction): string {
   switch (action.type) {
     case 'generateWorld': return `Generate World (seed ${action.config.seed})`;
     case 'worldConfig': return `Terrain Config (seed ${action.config.seed})`;
-    case 'revealSector': return `Reveal ${action.groupId.replace('SECTOR-', 'Sector ')}`;
-    case 'revealAll': return 'Reveal All';
     case 'updateHex': return `Edit ${action.hexId.replace('HEX-', '')}`;
     case 'addOverlay': return `Add ${action.overlay.type.replace('Plane of ', '')} Plane`;
     case 'removeOverlay': return 'Remove Overlay';

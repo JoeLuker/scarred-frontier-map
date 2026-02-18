@@ -5,8 +5,6 @@ import { WORLD, RENDER } from '../../core/config';
 export interface RenderLOD {
   showIcons: boolean;
   showCoords: boolean;
-  showFogText: boolean;
-  simpleFog: boolean;
   strokeWidth: number;
 }
 
@@ -21,11 +19,7 @@ export const hexToRgb = (hex: string) => {
 };
 
 export const getBlendedColor = (hex: HexData): string => {
-  const baseColorHex = hex.isExplored
-    ? TERRAIN_COLORS[hex.terrain]
-    : '#0f172a';
-
-  const baseRgb = hexToRgb(baseColorHex);
+  const baseRgb = hexToRgb(TERRAIN_COLORS[hex.terrain]);
 
   if (hex.terrain !== hex.baseTerrain) {
     return `rgb(${baseRgb.r}, ${baseRgb.g}, ${baseRgb.b})`;
@@ -45,8 +39,7 @@ export const getBlendedColor = (hex: HexData): string => {
   for (const inf of influences) {
     const pRgb = hexToRgb(PLANAR_COLORS[inf.type]);
 
-    const effectiveIntensity = hex.isExplored ? inf.intensity : inf.intensity * RENDER.FOG_TINT_MULT;
-    const weight = effectiveIntensity * RENDER.PLANAR_TINT_WEIGHT;
+    const weight = inf.intensity * RENDER.PLANAR_TINT_WEIGHT;
 
     r += pRgb.r * weight;
     g += pRgb.g * weight;
@@ -57,8 +50,7 @@ export const getBlendedColor = (hex: HexData): string => {
   return `rgb(${Math.round(r / totalWeight)}, ${Math.round(g / totalWeight)}, ${Math.round(b / totalWeight)})`;
 };
 
-export const getStrokeColor = (hex: HexData): string => {
-  if (!hex.isExplored) return '#1e293b';
+export const getStrokeColor = (_hex: HexData): string => {
   return '#0f172a';
 };
 
@@ -90,30 +82,6 @@ export const drawTerrainHex = (
   ctx.lineWidth = LOD.strokeWidth;
   ctx.strokeStyle = getStrokeColor(hex);
   ctx.stroke();
-
-  // Unexplored Styling
-  if (!hex.isExplored) {
-    if (zoomLevel > RENDER.ZOOM_FOG_FILL) {
-      ctx.fillStyle = `rgba(255,255,255,${RENDER.UNEXPLORED_FOG_ALPHA})`;
-      ctx.fill();
-    }
-
-    if (isHovered) {
-      ctx.lineWidth = LOD.strokeWidth * 2;
-      ctx.strokeStyle = '#fbbf24';
-      ctx.stroke();
-
-      if (LOD.showFogText) {
-        const fontSize = WORLD.HEX_SIZE * RENDER.FOG_FONT_SCALE;
-        ctx.font = `bold ${fontSize}px sans-serif`;
-        ctx.fillStyle = '#fbbf24';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('REVEAL', x, y);
-      }
-    }
-    return;
-  }
 
   // Bevel highlight
   if (zoomLevel > RENDER.ZOOM_BEVEL) {

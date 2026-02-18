@@ -1,17 +1,16 @@
 import React, { useState } from 'react';
 import { WorldGenConfig } from '../../core/types';
 import { DEFAULT_WORLD_CONFIG } from '../../core/config';
-import { Wand2, X, RefreshCw, Lock, Unlock } from 'lucide-react';
+import { Wand2, X, RefreshCw } from 'lucide-react';
 
 interface WorldWizardProps {
   isOpen: boolean;
   onClose: () => void;
-  onGenerate: (config: WorldGenConfig, preserveExplored: boolean) => void;
+  onGenerate: (config: WorldGenConfig) => void;
 }
 
 export const WorldWizard: React.FC<WorldWizardProps> = ({ isOpen, onClose, onGenerate }) => {
   const [config, setConfig] = useState<WorldGenConfig>(DEFAULT_WORLD_CONFIG);
-  const [preserveExplored, setPreserveExplored] = useState(true);
 
   if (!isOpen) return null;
 
@@ -43,7 +42,7 @@ export const WorldWizard: React.FC<WorldWizardProps> = ({ isOpen, onClose, onGen
   };
 
   const handleSubmit = () => {
-    onGenerate(config, preserveExplored);
+    onGenerate(config);
     onClose();
   };
 
@@ -105,23 +104,6 @@ export const WorldWizard: React.FC<WorldWizardProps> = ({ isOpen, onClose, onGen
             </div>
           </div>
 
-          <div
-            className="bg-slate-800/50 p-3 rounded-lg border border-slate-700 flex items-center justify-between cursor-pointer hover:bg-slate-800 transition-colors"
-            onClick={() => setPreserveExplored(!preserveExplored)}
-          >
-            <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${preserveExplored ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-500'}`}>
-                {preserveExplored ? <Lock size={14} /> : <Unlock size={14} />}
-              </div>
-              <div>
-                <div className="text-sm font-bold text-slate-200">Preserve Explored Areas</div>
-                <div className="text-[10px] text-slate-400">If checked, only hidden hexes change.</div>
-              </div>
-            </div>
-            <div className={`w-10 h-5 rounded-full relative transition-colors ${preserveExplored ? 'bg-indigo-600' : 'bg-slate-600'}`}>
-              <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${preserveExplored ? 'left-6' : 'left-1'}`} />
-            </div>
-          </div>
         </div>
 
         <div className="p-5 border-t border-slate-800 bg-slate-800/30 flex gap-3">
@@ -135,7 +117,7 @@ export const WorldWizard: React.FC<WorldWizardProps> = ({ isOpen, onClose, onGen
             onClick={handleSubmit}
             className="flex-[2] py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/40 transition-all font-bold text-sm"
           >
-            {preserveExplored ? 'Update Unexplored Regions' : 'Generate New World'}
+            Generate New World
           </button>
         </div>
 

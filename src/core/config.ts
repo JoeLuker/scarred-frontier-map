@@ -10,8 +10,7 @@ import {
 export const WORLD = {
   HEX_SIZE: 50,
   GRID_RADIUS: 66,           // Hex grid radius (~13,000 hexes)
-  START_RADIUS: 8,           // Center hexes start explored
-  RING_WIDTH: 5,             // Ring width for fog-of-war reveal groups
+  RING_WIDTH: 5,             // Ring width for sector groups
   HISTORY_LIMIT: 20,
 } as const;
 
@@ -161,7 +160,6 @@ export const NOISE = {
 export const MESH = {
   VERTEX_SPACING: WORLD.HEX_SIZE / 2,  // Derived from HEX_SIZE — half a hex width
   HEX_GRID_OPACITY: 0.15,    // Opacity of hex grid overlay lines
-  FOG_MIX: 0.35,             // Desaturation + darken for unexplored fog overlay
 } as const;
 
 // --- Render / LOD Constants ---
@@ -169,10 +167,7 @@ export const MESH = {
 export const RENDER = {
   ZOOM_ICONS: 0.6,
   ZOOM_COORDS: 1.5,
-  ZOOM_FOG_TEXT: 0.35,
-  ZOOM_SIMPLE_FOG: 0.20,
   ZOOM_BEVEL: 0.4,
-  ZOOM_FOG_FILL: 0.5,
   // 3D height
   HEIGHT_SCALE: 120.0,           // Max height offset as fraction of HEX_SIZE
   SIDE_DARKEN: 0.3,              // Side face color multiplier at cliff top
@@ -180,7 +175,6 @@ export const RENDER = {
   BEVEL_INNER: 0.80,             // Bevel highlight starts at this distance from center
   BEVEL_OUTER: 0.92,             // Bevel highlight ends at this distance
   BEVEL_STRENGTH: 0.12,          // White highlight intensity
-  FOG_WHITE_MIX: 0.04,           // Fog overlay white tint (similar to UNEXPLORED_FOG_ALPHA)
 
   ZOOM_MIN: 0.05,
   ZOOM_MAX: 3.0,
@@ -192,10 +186,7 @@ export const RENDER = {
   ICON_SCALE_FACTOR: 0.5,
   COORD_FONT_SCALE: 0.25,
   COORD_OFFSET_SCALE: 0.6,
-  FOG_FONT_SCALE: 0.3,
-  UNEXPLORED_FOG_ALPHA: 0.03,
   PLANAR_TINT_WEIGHT: 0.6,
-  FOG_TINT_MULT: 0.3,
 } as const;
 
 // --- 3D Camera ---

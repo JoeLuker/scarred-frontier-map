@@ -2,13 +2,13 @@ import { MESH_VERTEX_BYTE_STRIDE } from './types';
 import type { TerrainMesh } from './terrain-mesh';
 import type { HexStateTexture } from './hex-state-texture';
 
-// --- WGSL Shader ---
+// --- WGSL Shader (terrain) ---
 
-function createTerrainShader(): string {
+function createShader(): string {
   return /* wgsl */ `
 
 // ============================================================
-// Uniform buffer (256 bytes)
+// Uniform buffer (304 bytes)
 // ============================================================
 
 struct Uniforms {
@@ -23,11 +23,11 @@ struct Uniforms {
   moisture_forest: f32,             // 92
   moisture_marsh: f32,              // 96
   hex_grid_opacity: f32,            // 100
-  fog_mix: f32,                     // 104
-  _pad0: f32,                       // 108
+  _pad0: f32,                       // 104
+  _pad1: f32,                       // 108
   terrain_colors: array<vec4f, 11>, // 112-287 (8 base + 3 mutation-only)
   eye_pos: vec3f,                   // 288-299
-  _pad1: f32,                       // 300-303
+  _pad2: f32,                       // 300-303
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -245,7 +245,7 @@ fn aces_tonemap(x: vec3f) -> vec3f {
 //
 // Layer 3 (Hex Tile Identity): pixel_to_hex → texture lookup → terrain type
 // Layer 2 (Surface Material): tile base color + noise/rock/snow/lighting
-// Layer 4 (Game State): planar effects, fog of war
+// Layer 4 (Game State): planar effects
 // Layer 5 (Post-Processing): grid overlay, atmosphere, tone mapping
 // ============================================================
 
@@ -389,11 +389,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
 
   // ═══════════════════════════════════════════════════════════════
   // LAYER 4: Per-Hex Game State
-  // Planar effects and fog of war. Only modifies existing color.
-  // Reads from the same hex_state texture already looked up in Layer 3.
+  // Planar effects. Reads from the same hex_state texture looked up in Layer 3.
   // ═══════════════════════════════════════════════════════════════
 
-  let explored = hex_state.r;
   let plane_type = u32(round(hex_state.g * 255.0));
   let p_intensity = hex_state.b;
 
@@ -452,13 +450,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     }
   }
 
-  // Fog-of-war: desaturation + darken
-  if (explored < 0.5) {
-    let lum = dot(color, vec3f(0.299, 0.587, 0.114));
-    let fog_grey = vec3f(lum) * 0.4;
-    color = mix(color, fog_grey, u.fog_mix);
-  }
-
   // ═══════════════════════════════════════════════════════════════
   // LAYER 5: Post-Processing
   // Grid overlay, atmospheric scattering, tone mapping.
@@ -502,12 +493,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
 
   return vec4f(clamp(color, vec3f(0.0), vec3f(1.0)), 1.0);
 }
+
 `;
 }
 
-// --- Uniform buffer layout (256 bytes) ---
+// --- Uniform buffer layout ---
 const UNIFORM_SIZE = 304;
-const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus';
+const DEPTH_FORMAT: GPUTextureFormat = 'depth32float';
 
 export class TerrainRenderer {
   private device: GPUDevice;
@@ -523,8 +515,8 @@ export class TerrainRenderer {
   private currentMesh: TerrainMesh | null = null;
   private currentHexState: HexStateTexture | null = null;
 
-  // Dummy 1x1 texture for when no hex state is set
-  private dummyTexture: GPUTexture;
+  // Dummy texture for initial bind group
+  private dummyHexTexture: GPUTexture;
 
   private constructor(
     device: GPUDevice,
@@ -533,7 +525,7 @@ export class TerrainRenderer {
     uniformBuffer: GPUBuffer,
     bindGroupLayout: GPUBindGroupLayout,
     format: GPUTextureFormat,
-    dummyTexture: GPUTexture,
+    dummyHexTexture: GPUTexture,
   ) {
     this.device = device;
     this.context = context;
@@ -541,7 +533,7 @@ export class TerrainRenderer {
     this.uniformBuffer = uniformBuffer;
     this.bindGroupLayout = bindGroupLayout;
     this.format = format;
-    this.dummyTexture = dummyTexture;
+    this.dummyHexTexture = dummyHexTexture;
   }
 
   static create(device: GPUDevice, canvas: HTMLCanvasElement): TerrainRenderer {
@@ -551,7 +543,7 @@ export class TerrainRenderer {
 
     context.configure({ device, format, alphaMode: 'opaque' });
 
-    const shaderModule = device.createShaderModule({ code: createTerrainShader() });
+    const shaderModule = device.createShaderModule({ code: createShader() });
 
     const uniformBuffer = device.createBuffer({
       size: UNIFORM_SIZE,
@@ -573,8 +565,10 @@ export class TerrainRenderer {
       ],
     });
 
+    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+
     const pipeline = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
+      layout: pipelineLayout,
       vertex: {
         module: shaderModule,
         entryPoint: 'vs_main',
@@ -596,7 +590,7 @@ export class TerrainRenderer {
       },
       primitive: {
         topology: 'triangle-list',
-        cullMode: 'none', // terrain viewed from any angle
+        cullMode: 'none',
       },
       depthStencil: {
         depthWriteEnabled: true,
@@ -605,21 +599,22 @@ export class TerrainRenderer {
       },
     });
 
-    // Create a 1x1 dummy texture for initial bind group
-    const dummyTexture = device.createTexture({
+    // --- Dummy texture ---
+    const dummyHexTexture = device.createTexture({
       size: [1, 1],
       format: 'rgba8unorm',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
     device.queue.writeTexture(
-      { texture: dummyTexture },
+      { texture: dummyHexTexture },
       new Uint8Array([0, 0, 0, 0]),
       { bytesPerRow: 4 },
       [1, 1],
     );
 
     return new TerrainRenderer(
-      device, context, pipeline, uniformBuffer, bindGroupLayout, format, dummyTexture,
+      device, context, pipeline, uniformBuffer,
+      bindGroupLayout, format, dummyHexTexture,
     );
   }
 
@@ -636,7 +631,6 @@ export class TerrainRenderer {
     moistureForest: number,
     moistureMarsh: number,
     hexGridOpacity: number,
-    fogMix: number,
     terrainColors: Float32Array, // 11 × 4 = 44 floats (rgba per terrain type)
     eyePos: readonly [number, number, number],
   ): void {
@@ -656,17 +650,17 @@ export class TerrainRenderer {
     data[23] = moistureForest;
     data[24] = moistureMarsh;
     data[25] = hexGridOpacity;
-    data[26] = fogMix;
+    data[26] = 0; // pad
     data[27] = 0; // pad
 
     // terrainColors: 11 × vec4f = 44 floats at offset 28
-    // array<vec4f, 11> starts at byte 112 = float offset 28
     data.set(terrainColors.subarray(0, 44), 28);
 
     // eye_pos: vec3f at byte 288 = float offset 72
     data[72] = eyePos[0];
     data[73] = eyePos[1];
     data[74] = eyePos[2];
+    data[75] = 0; // pad
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, data);
   }
@@ -682,12 +676,13 @@ export class TerrainRenderer {
   }
 
   private rebuildBindGroup(): void {
-    const texture = this.currentHexState?.texture ?? this.dummyTexture;
+    const hexTexture = this.currentHexState?.texture ?? this.dummyHexTexture;
+
     this.bindGroup = this.device.createBindGroup({
       layout: this.bindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: texture.createView() },
+        { binding: 1, resource: hexTexture.createView() },
       ],
     });
   }
@@ -712,6 +707,7 @@ export class TerrainRenderer {
     const depthTexture = this.ensureDepthTexture(colorTexture.width, colorTexture.height);
 
     const encoder = this.device.createCommandEncoder();
+
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
         view: colorTexture.createView(),
@@ -748,6 +744,6 @@ export class TerrainRenderer {
   destroy(): void {
     this.uniformBuffer.destroy();
     this.depthTexture?.destroy();
-    this.dummyTexture.destroy();
+    this.dummyHexTexture.destroy();
   }
 }

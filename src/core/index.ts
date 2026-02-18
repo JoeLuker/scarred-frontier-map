@@ -21,7 +21,7 @@ export {
 export { WORLD, DEFAULT_WORLD_CONFIG, TERRAIN, BIOME, NOISE, RENDER, MESH } from './config';
 
 // World generation (geometry only — terrain sampling is GPU)
-export { generateWorldGrid, mergeTerrain, revealSector, revealAll } from './world';
+export { generateWorldGrid, mergeTerrain } from './world';
 
 // Planar system
 export { computeHexState, applyOverlaysToMap, resolveChemistry } from './planar';
