@@ -54,6 +54,7 @@ interface HexGridProps {
   onModifyOverlay: (overlay: PlanarOverlay) => void;
   onCommitOverlay: () => void;
   showGizmos: boolean;
+  showGrid: boolean;
 }
 
 export const HexGrid: React.FC<HexGridProps> = ({
@@ -65,6 +66,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
   onModifyOverlay,
   onCommitOverlay,
   showGizmos,
+  showGrid,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);     // overlay (top)
@@ -74,6 +76,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
   const overlaysRef = useRef(planarOverlays);
   const worldConfigRef = useRef(worldConfig);
   const showGizmosRef = useRef(showGizmos);
+  const showGridRef = useRef(showGrid);
   const draggingOverlayIdRef = useRef<string | null>(null);
 
   // GPU resources
@@ -120,6 +123,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
   useEffect(() => { overlaysRef.current = planarOverlays; }, [planarOverlays]);
   useEffect(() => { worldConfigRef.current = worldConfig; }, [worldConfig]);
   useEffect(() => { showGizmosRef.current = showGizmos; }, [showGizmos]);
+  useEffect(() => { showGridRef.current = showGrid; }, [showGrid]);
 
   // --- GPU Init ---
   useEffect(() => {
@@ -404,7 +408,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
       moistureDesert,
       moistureForest,
       moistureMarsh,
-      MESH.HEX_GRID_OPACITY,
+      showGridRef.current ? MESH.HEX_GRID_OPACITY : 0,
       GPU_TERRAIN_COLORS,
       eyePos,
     );

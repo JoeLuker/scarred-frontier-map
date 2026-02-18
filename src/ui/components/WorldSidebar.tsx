@@ -3,7 +3,7 @@ import { HexData, PlanarOverlay, PlanarAlignment, HistoryAction } from '../../co
 import { getActionLabel } from '../../core/history';
 import { PLANAR_COLORS } from '../theme';
 import { WORLD } from '../../core/config';
-import { Map as MapIcon, ChevronRight, ChevronUp, ChevronDown, Upload, Download, RotateCcw, RotateCw, Trash2, Plus, Move, Clock } from 'lucide-react';
+import { Map as MapIcon, ChevronRight, ChevronUp, ChevronDown, Upload, Download, RotateCcw, RotateCw, Trash2, Plus, Move, Clock, Grid3x3 } from 'lucide-react';
 
 const AVAILABLE_PLANES = [
   PlanarAlignment.FIRE,
@@ -35,6 +35,8 @@ interface WorldSidebarProps {
   onModifyOverlay: (overlay: PlanarOverlay) => void;
   onCommitOverlay: () => void;
   onPlanesOpenChange?: (isOpen: boolean) => void;
+  showGrid: boolean;
+  onToggleGrid: () => void;
 }
 
 export const WorldSidebar: React.FC<WorldSidebarProps> = ({
@@ -56,6 +58,8 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
   onModifyOverlay,
   onCommitOverlay,
   onPlanesOpenChange,
+  showGrid,
+  onToggleGrid,
 }) => {
   const [isOpen, setIsOpen] = useState(true);
   const [isRegionsOpen, setIsRegionsOpen] = useState(false);
@@ -295,7 +299,7 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
           </div>
 
           <div className="p-3 border-t border-slate-800 bg-slate-900/50 space-y-2">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 onClick={onUndo}
                 disabled={!canUndo}
@@ -311,6 +315,17 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
                 title="Redo"
               >
                 <RotateCw size={14} />
+              </button>
+              <button
+                onClick={onToggleGrid}
+                className={`border py-2 rounded-lg flex items-center justify-center transition-all ${
+                  showGrid
+                    ? 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-white'
+                    : 'bg-slate-800/50 border-slate-700/50 text-slate-600 hover:bg-slate-700 hover:text-white'
+                }`}
+                title={showGrid ? 'Hide Grid' : 'Show Grid'}
+              >
+                <Grid3x3 size={14} />
               </button>
             </div>
 

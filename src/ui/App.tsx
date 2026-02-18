@@ -38,6 +38,7 @@ const App: React.FC = () => {
 
   const [isGenBarOpen, setIsGenBarOpen] = useState(false);
   const [isPlanesOpen, setIsPlanesOpen] = useState(true);
+  const [showGrid, setShowGrid] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleOpenGenBar = useCallback(() => {
@@ -115,6 +116,7 @@ const App: React.FC = () => {
           onModifyOverlay={modifyOverlay}
           onCommitOverlay={commitOverlayModification}
           showGizmos={planarOverlays.length > 0 && isPlanesOpen}
+          showGrid={showGrid}
         />
       </div>
 
@@ -142,6 +144,8 @@ const App: React.FC = () => {
             onModifyOverlay={modifyOverlay}
             onCommitOverlay={commitOverlayModification}
             onPlanesOpenChange={setIsPlanesOpen}
+            showGrid={showGrid}
+            onToggleGrid={() => setShowGrid(prev => !prev)}
           />
         </div>
 
