@@ -54,12 +54,10 @@ struct VertexOut {
   @location(3) smooth_normal: vec3f,
 }
 
-// Karst terrain profile: flat valleys, steep cliff walls, tower peaks
-// PARALLEL IMPLEMENTATION: Must match terrain-mesh.ts karstHeight() (CPU-side normal computation).
-fn karst_height(h: f32) -> f32 {
-  let cliff = smoothstep(0.12, 0.28, h);
-  let peak = pow(h, 0.65);
-  return cliff * peak;
+// Terrain displacement: cubic ease-in compresses low/mid elevations.
+// MUST match terrain-mesh.ts displacementCurve() (CPU-side normal computation).
+fn displacement_curve(h: f32) -> f32 {
+  return h * h * h;
 }
 
 @vertex
@@ -68,11 +66,11 @@ fn vs_main(in: VertexIn) -> VertexOut {
   let land_range = 1.0 - sea;
 
   // Pure elevation-based displacement. Rivers have elevation = seaLevel,
-  // so normElev = 0 → karstHeight(0) = 0 → no displacement. No terrain type needed.
+  // so normElev = 0 → displacement_curve(0) = 0 → no displacement. No terrain type needed.
   var y: f32 = 0.0;
   if (in.elevation >= sea && land_range > 0.0) {
     let norm_elev = (in.elevation - sea) / land_range;
-    y = karst_height(norm_elev) * u.height_scale;
+    y = displacement_curve(norm_elev) * u.height_scale;
   }
 
   let world = vec3f(in.pos_xz.x, y, in.pos_xz.y);
@@ -270,13 +268,20 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let a_byte = u32(round(hex_state.a * 255.0));
   let hex_terrain_id = a_byte >> 4u;
   let ring_boundary = (a_byte & 1u) > 0u;
-  let is_water = hex_terrain_id == 0u || in.elevation < sea;
+  let is_water = hex_terrain_id == 0u;
 
   // Curvature approximation — must be in uniform control flow (before any
   // non-uniform branching) since dpdx/dpdy require all quad invocations active.
   let ddx_e = dpdx(in.elevation);
   let ddy_e = dpdy(in.elevation);
   let curvature = clamp((dpdx(ddx_e) + dpdy(ddy_e)) * 200.0, -1.0, 1.0);
+
+  // Discard fragments outside the hex world boundary (hex distance > grid radius).
+  // Placed after derivative computation to keep dpdx/dpdy in uniform control flow.
+  let hex_dist = max(max(abs(hex.qr.x), abs(hex.qr.y)), abs(hex.qr.x + hex.qr.y));
+  if (hex_dist > u.grid_radius) {
+    discard;
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // LAYER 2: Surface Material
@@ -491,12 +496,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   );
   let scatter_color = mix(rayleigh_color, SUN_COLOR, mie);
   color = mix(color, scatter_color, fog_amount);
-
-  // World edge fade
-  let world_dist2 = in.world_pos.x * in.world_pos.x + in.world_pos.z * in.world_pos.z;
-  let world_radius = u.grid_radius * u.hex_size * SQRT3;
-  let edge_fade = smoothstep(world_radius * world_radius, (world_radius - 200.0) * (world_radius - 200.0), world_dist2);
-  color *= edge_fade;
 
   // ACES filmic tone mapping
   color = aces_tonemap(color * 0.95);

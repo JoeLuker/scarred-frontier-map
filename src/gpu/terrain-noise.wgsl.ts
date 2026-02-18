@@ -8,7 +8,12 @@ import { TERRAIN } from '../core/config';
  * Defines:
  * - TerrainParams struct (WorldGenConfig fields relevant to terrain sampling)
  * - TerrainFieldSample result struct
- * - Noise primitives: hash, smooth_noise, fbm2/3/4
+ * - NoiseDeriv struct (value + analytical partial derivatives)
+ * - Noise primitives: hash, smooth_noise, smooth_noise_d (with derivatives)
+ * - Simple fBM: fbm2, fbm3 (for moisture, rivers, coast)
+ * - IQ derivative-feedback fBM (Quilez) — heterogeneous continental shapes
+ * - Swiss turbulence (de Carpentier) — sharp ridges with smooth valleys
+ * - Double domain warp — nested warping for tectonic distortion
  * - sample_terrain_field(x, z, params) — full elevation+moisture pipeline
  *
  * Constants are baked from src/core/config.ts at module load time.
@@ -48,8 +53,6 @@ const DOMAIN_WARP_MAX: f32 = ${TERRAIN.DOMAIN_WARP_MAX};
 const WARP_COORD_OFFSET: f32 = ${TERRAIN.WARP_COORD_OFFSET};
 const CONT_FREQ_BASE: f32 = ${TERRAIN.CONT_FREQ_BASE};
 const CONT_FREQ_RANGE: f32 = ${TERRAIN.CONT_FREQ_RANGE};
-const RIDGE_EXP_BASE: f32 = ${TERRAIN.RIDGE_EXP_BASE};
-const RIDGE_EXP_RANGE: f32 = ${TERRAIN.RIDGE_EXP_RANGE};
 const EROSION_RIDGE_FACTOR: f32 = ${TERRAIN.EROSION_RIDGE_FACTOR};
 const EROSION_DETAIL_FACTOR: f32 = ${TERRAIN.EROSION_DETAIL_FACTOR};
 const COAST_AMPLITUDE: f32 = ${TERRAIN.COAST_AMPLITUDE};
@@ -90,8 +93,15 @@ struct TerrainFieldSample {
   is_river: bool,
 }
 
+// Noise value with analytical partial derivatives
+struct NoiseDeriv {
+  val: f32,
+  dx: f32,
+  dy: f32,
+}
+
 // ============================================================
-// Noise functions — exact port of src/core/noise.ts
+// Noise primitives
 // ============================================================
 
 fn hash(x: i32, y: i32, seed: i32) -> u32 {
@@ -104,6 +114,7 @@ fn hash_norm(x: i32, y: i32, seed: i32) -> f32 {
   return f32(hash(x, y, seed)) / 4294967296.0;
 }
 
+// Value noise with cubic hermite interpolation
 fn smooth_noise(x: f32, y: f32, seed: i32) -> f32 {
   let fx = floor(x);
   let fy = floor(y);
@@ -125,6 +136,47 @@ fn smooth_noise(x: f32, y: f32, seed: i32) -> f32 {
   return b + wy * (t - b);
 }
 
+// Value noise with analytical partial derivatives (hermite interpolation).
+// Returns NoiseDeriv where .dx/.dy are partial derivatives w.r.t. input coords.
+fn smooth_noise_d(x: f32, y: f32, seed: i32) -> NoiseDeriv {
+  let fx = floor(x);
+  let fy = floor(y);
+  let ix = i32(fx);
+  let iy = i32(fy);
+
+  // Corner values
+  let a = f32(hash(ix, iy, seed)) / 4294967296.0;
+  let b = f32(hash(ix + 1i, iy, seed)) / 4294967296.0;
+  let c = f32(hash(ix, iy + 1i, seed)) / 4294967296.0;
+  let d = f32(hash(ix + 1i, iy + 1i, seed)) / 4294967296.0;
+
+  let tx = x - fx;
+  let ty = y - fy;
+
+  // Hermite interpolation weights: w(t) = t²(3 - 2t)
+  let wx = tx * tx * (3.0 - 2.0 * tx);
+  let wy = ty * ty * (3.0 - 2.0 * ty);
+
+  // Hermite derivatives: dw/dt = 6t(1-t)
+  let dwx = 6.0 * tx * (1.0 - tx);
+  let dwy = 6.0 * ty * (1.0 - ty);
+
+  // Bilinear coefficients: f = a + k1*wx + k2*wy + k3*wx*wy
+  let k1 = b - a;
+  let k2 = c - a;
+  let k3 = a - b - c + d;
+
+  return NoiseDeriv(
+    a + k1 * wx + k2 * wy + k3 * wx * wy,
+    dwx * (k1 + k3 * wy),
+    dwy * (k2 + k3 * wx),
+  );
+}
+
+// ============================================================
+// Simple fBM (used for moisture, rivers, coast — no derivatives needed)
+// ============================================================
+
 const FBM_SEED_STRIDE: i32 = 31;
 
 fn fbm2(x: f32, y: f32, seed: i32) -> f32 {
@@ -140,12 +192,98 @@ fn fbm3(x: f32, y: f32, seed: i32) -> f32 {
   return (o0 + o1 + o2) / 1.75;
 }
 
-fn fbm4(x: f32, y: f32, seed: i32) -> f32 {
-  let o0 = smooth_noise(x, y, seed);
-  let o1 = smooth_noise(x * 2.0, y * 2.0, seed + FBM_SEED_STRIDE) * 0.5;
-  let o2 = smooth_noise(x * 4.0, y * 4.0, seed + FBM_SEED_STRIDE * 2) * 0.25;
-  let o3 = smooth_noise(x * 8.0, y * 8.0, seed + FBM_SEED_STRIDE * 3) * 0.125;
-  return (o0 + o1 + o2 + o3) / 1.875;
+// ============================================================
+// Advanced noise functions
+// ============================================================
+
+// IQ derivative-feedback fBM (Inigo Quilez).
+// Accumulates noise derivatives and suppresses fine octaves where terrain is
+// already steep. Produces heterogeneous landmasses: flat interiors with full
+// detail, steep continental edges with smooth falloff.
+// Returns NoiseDeriv: .val is the fBM value, .dx/.dy are the accumulated
+// gradient (useful for wind-shadow moisture and slope-dependent effects).
+fn iq_fbm(
+  x: f32, y: f32, seed: i32,
+  octaves: i32, lacunarity: f32, gain: f32,
+) -> NoiseDeriv {
+  var sum = 0.0;
+  var sum_d = vec2f(0.0);
+  var amp = 1.0;
+  var freq = 1.0;
+  var max_amp = 0.0;
+
+  for (var i = 0i; i < octaves; i++) {
+    let n = smooth_noise_d(x * freq, y * freq, seed + i * FBM_SEED_STRIDE);
+    sum_d += vec2f(n.dx, n.dy);
+    sum += amp * n.val / (1.0 + dot(sum_d, sum_d));
+    max_amp += amp;
+    amp *= gain;
+    freq *= lacunarity;
+  }
+
+  let inv = 1.0 / max(max_amp, 0.001);
+  return NoiseDeriv(sum * inv, sum_d.x * inv, sum_d.y * inv);
+}
+
+// Swiss turbulence (de Carpentier / Jordan).
+// Ridged noise with derivative-driven coordinate warping. Each octave's
+// gradient accumulates and warps subsequent octaves toward ridge lines.
+// Valleys get reduced amplitude (smooth), ridges accumulate sharp detail.
+// warp: controls how aggressively coordinates are pulled toward ridges (0.0-1.0).
+fn swiss_turbulence(
+  x: f32, y: f32, seed: i32,
+  octaves: i32, lacunarity: f32, gain: f32, warp: f32,
+) -> f32 {
+  var sum = 0.0;
+  var sum_d = vec2f(0.0);
+  var amp = 1.0;
+  var freq = 1.0;
+  var max_amp = 0.0;
+
+  for (var i = 0i; i < octaves; i++) {
+    // Warp coordinates by accumulated derivative (pulls toward ridge lines)
+    let px = x * freq + sum_d.x * warp;
+    let py = y * freq + sum_d.y * warp;
+
+    let n = smooth_noise_d(px, py, seed + i * FBM_SEED_STRIDE);
+
+    // Ridge transform: peak at noise = 0.5, valleys at 0 and 1
+    let r = 1.0 - abs(2.0 * n.val - 1.0);
+    sum += amp * r * r;
+    max_amp += amp;
+
+    // Derivative accumulation with ridge weighting (de Carpentier's formulation)
+    // -r pulls coordinates toward ridges; amplitude weighting maintains octave balance
+    sum_d += vec2f(n.dx, n.dy) * amp * -r;
+
+    // Amplitude modulation: valleys (low running sum) suppress fine detail
+    amp *= gain * clamp(sum, 0.0, 1.0);
+    freq *= lacunarity;
+  }
+
+  return sum / max(max_amp, 0.001);
+}
+
+// Double domain warp: nested coordinate warping for tectonic-like distortion.
+// Inner warp creates broad deformation, outer warp adds secondary folding.
+// More organic than single-pass warp — produces curving, layered landforms.
+fn double_warp(x: f32, y: f32, seed: i32, scale: f32, strength: f32) -> vec2f {
+  // Inner warp field
+  let inner_x = fbm3(x * scale, y * scale, seed + 900i);
+  let inner_y = fbm3(x * scale + WARP_COORD_OFFSET, y * scale + WARP_COORD_OFFSET, seed + 900i);
+
+  // Apply inner warp at half strength
+  let mx = x + (inner_x - 0.5) * strength * 0.5;
+  let my = y + (inner_y - 0.5) * strength * 0.5;
+
+  // Outer warp field (higher frequency for secondary detail)
+  let outer_x = fbm3(mx * scale * 1.5, my * scale * 1.5, seed + 950i);
+  let outer_y = fbm3(mx * scale * 1.5 + WARP_COORD_OFFSET, my * scale * 1.5 + WARP_COORD_OFFSET, seed + 950i);
+
+  return vec2f(
+    x + (outer_x - 0.5) * strength,
+    y + (outer_y - 0.5) * strength,
+  );
 }
 
 // ============================================================
@@ -155,23 +293,27 @@ fn fbm4(x: f32, y: f32, seed: i32) -> f32 {
 fn sample_terrain_field(wx: f32, wy: f32, p: TerrainParams) -> TerrainFieldSample {
   let seed = p.seed;
 
-  // --- 0. CHAOS DOMAIN WARP ---
+  // --- 0. DOMAIN WARP (double warp for organic tectonic distortion) ---
   var sx = wx;
   var sy = wy;
   if (p.chaos > 0.0) {
-    let warp_amount = p.chaos * DOMAIN_WARP_MAX;
-    let dwx = fbm3(wx * DOMAIN_WARP_SCALE, wy * DOMAIN_WARP_SCALE, seed + 900i);
-    let dwy = fbm3(wx * DOMAIN_WARP_SCALE + WARP_COORD_OFFSET, wy * DOMAIN_WARP_SCALE + WARP_COORD_OFFSET, seed + 900i);
-    sx = wx + (dwx - 0.5) * warp_amount;
-    sy = wy + (dwy - 0.5) * warp_amount;
+    let warped = double_warp(wx, wy, seed, DOMAIN_WARP_SCALE, p.chaos * DOMAIN_WARP_MAX);
+    sx = warped.x;
+    sy = warped.y;
   }
 
   // --- 1. LAYERED ELEVATION ---
+  // Continental: IQ fBM — derivative feedback creates heterogeneous landmasses
+  // Returns NoiseDeriv: .val for elevation, .dx/.dy for wind-shadow moisture
   let cont_freq = CONTINENTAL_SCALE * (CONT_FREQ_BASE + p.continent_scale * CONT_FREQ_RANGE);
-  let continental = fbm4(sx * cont_freq, sy * cont_freq, seed);
-  let ridge_raw = fbm3(sx * RIDGE_SCALE, sy * RIDGE_SCALE, seed + 200i);
-  let ridge_exp = RIDGE_EXP_BASE + p.ridge_sharpness * RIDGE_EXP_RANGE;
-  let ridge = pow(1.0 - abs(2.0 * ridge_raw - 1.0), ridge_exp);
+  let continental_n = iq_fbm(sx * cont_freq, sy * cont_freq, seed, 6, 2.0, 0.5);
+  let continental = continental_n.val;
+
+  // Ridges: Swiss turbulence — sharp convergent ridges with smooth valleys
+  let warp_str = 0.3 + p.ridge_sharpness * 0.7;
+  let ridge = swiss_turbulence(sx * RIDGE_SCALE, sy * RIDGE_SCALE, seed + 200i, 5, 2.2, 0.5, warp_str);
+
+  // Detail: simple fBM for local roughness
   let detail = fbm2(sx * DETAIL_SCALE, sy * DETAIL_SCALE, seed + 400i);
 
   let eff_ridge_weight = RIDGE_WEIGHT * (1.0 - p.erosion * EROSION_RIDGE_FACTOR);
@@ -222,10 +364,21 @@ fn sample_terrain_field(wx: f32, wy: f32, p: TerrainParams) -> TerrainFieldSampl
   if (elev_range > 0.0) {
     coastal_prox = clamp(1.0 - (elevation - sea_level) / elev_range, 0.0, 1.0);
   }
+
+  // Wind-shadow (orographic precipitation): windward slopes get more moisture,
+  // leeward slopes get less (rain shadow). Wind blows west-to-east (+X direction).
+  // The continental gradient tells us terrain slope direction. Projecting onto
+  // wind direction: positive = windward (upslope), negative = leeward (downslope).
+  let wind_dir = vec2f(1.0, 0.0);
+  let terrain_gradient = vec2f(continental_n.dx, continental_n.dy) * cont_freq;
+  let windward = dot(terrain_gradient, wind_dir);
+  let wind_shadow = clamp(windward * 2.0, -0.15, 0.15);
+
   let moisture = clamp(
     moisture_noise * MOISTURE_NOISE_WEIGHT
     + coastal_prox * COASTAL_WEIGHT
-    + p.vegetation_level * VEG_BIAS_WEIGHT,
+    + p.vegetation_level * VEG_BIAS_WEIGHT
+    + wind_shadow,
     0.0, 1.0
   );
 

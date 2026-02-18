@@ -11,19 +11,14 @@ export interface MeshBuffers {
 }
 
 // --- Height displacement ---
-// Must match terrain-renderer.ts WGSL karst_height().
-// Both use smoothstep(0.12, 0.28, h) * pow(h, 0.65). Any change here must
-// be mirrored in the vertex shader, otherwise CPU mesh normals diverge from GPU height.
+// Must match terrain-renderer.ts WGSL displacement_curve().
+// Cubic ease-in: pow(h, 3) compresses low/mid elevations so only the highest
+// peaks produce significant displacement. This prevents the ridge noise's sharp
+// cusps from creating near-vertical cliffs at moderate elevations.
+// Any change here must be mirrored in the vertex shader.
 
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
-
-function karstHeight(h: number): number {
-  const cliff = smoothstep(0.12, 0.28, h);
-  const peak = Math.pow(h, 0.65);
-  return cliff * peak;
+function displacementCurve(h: number): number {
+  return h * h * h;
 }
 
 // Layer 1 (Geometry): Pure heightfield displacement. No terrain type awareness.
@@ -36,17 +31,94 @@ export function computeDisplacedY(
 ): number {
   if (elevation >= seaLevel && landRange > 0) {
     const normElev = (elevation - seaLevel) / landRange;
-    return karstHeight(normElev) * heightScale;
+    return displacementCurve(normElev) * heightScale;
   }
   return 0;
+}
+
+// --- Thermal erosion ---
+// Jacobi-style iteration on a regular grid. Each cell transfers material to
+// lower neighbors when slope exceeds a talus threshold. Non-conserving
+// (material removed from high points, not deposited). Underwater cells are
+// skipped to preserve ocean/river bed stability.
+
+const THERMAL_TALUS = 0.04;   // Max stable slope (elevation units per texel)
+const THERMAL_RATE = 0.4;     // Transfer rate per iteration
+const THERMAL_MAX_ITERS = 100; // Iterations at erosion=1.0
+
+function thermalErode(
+  elevations: Float32Array,
+  cols: number,
+  rows: number,
+  erosionStrength: number,
+  seaLevel: number,
+): void {
+  const iterations = Math.floor(erosionStrength * THERMAL_MAX_ITERS);
+  if (iterations <= 0) return;
+
+  const total = cols * rows;
+  let src = elevations;
+  let dst = new Float32Array(total);
+
+  for (let iter = 0; iter < iterations; iter++) {
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const idx = row * cols + col;
+        const h = src[idx]!;
+
+        // Skip underwater cells (preserve ocean/river beds)
+        if (h <= seaLevel) {
+          dst[idx] = h;
+          continue;
+        }
+
+        let delta = 0;
+
+        // Right neighbor
+        if (col + 1 < cols) {
+          const d = h - src[idx + 1]!;
+          if (d > THERMAL_TALUS) delta += d - THERMAL_TALUS;
+        }
+        // Left neighbor
+        if (col > 0) {
+          const d = h - src[idx - 1]!;
+          if (d > THERMAL_TALUS) delta += d - THERMAL_TALUS;
+        }
+        // Down neighbor
+        if (row + 1 < rows) {
+          const d = h - src[idx + cols]!;
+          if (d > THERMAL_TALUS) delta += d - THERMAL_TALUS;
+        }
+        // Up neighbor
+        if (row > 0) {
+          const d = h - src[idx - cols]!;
+          if (d > THERMAL_TALUS) delta += d - THERMAL_TALUS;
+        }
+
+        dst[idx] = h - delta * THERMAL_RATE;
+      }
+    }
+
+    // Ping-pong: swap src and dst
+    const tmp = src;
+    src = dst;
+    dst = tmp;
+  }
+
+  // If result ended up in the temp buffer, copy back to elevations
+  if (src !== elevations) {
+    elevations.set(src.subarray(0, total));
+  }
 }
 
 /**
  * Build a regular triangle-grid terrain mesh covering a circular world area.
  *
- * Pass 1 (CPU): Generate grid positions, boundary culling, build gridToVert mapping + index buffer.
- * Pass 2 (GPU): Upload positions to MeshCompute → get elevation + moisture arrays.
- * Pass 3 (CPU): Compute computeDisplacedY() + central-difference normals. Write interleaved vertex buffer.
+ * Pass 1 (CPU): Generate full grid positions (no boundary culling yet).
+ * Pass 2 (GPU): Upload positions to MeshCompute → get elevation + moisture for all grid cells.
+ * Pass 2.5 (CPU): Thermal erosion on the full-grid elevation array.
+ * Pass 3 (CPU): Cull to world radius, compute displaced Y + central-difference normals,
+ *               write interleaved vertex buffer + index buffer.
  *
  * Layer 1 (Geometry): This mesh knows nothing about hexes. Terrain type is resolved
  * per-fragment in the shader via hex state texture lookup (Layer 3).
@@ -70,88 +142,90 @@ export async function buildTerrainMesh(
 
   const { seaLevel, landRange, heightScale } = getTerrainRenderParams(config);
 
-  // --- Pass 1 (CPU): Generate grid positions, cull by radius, build gridToVert mapping ---
-  const maxVerts = cols * rows;
-  const gridToVert = new Int32Array(maxVerts);
+  // --- Pass 1 (CPU): Generate ALL grid positions (no culling) ---
+  const totalVerts = cols * rows;
+  const gpuPositions = new Float32Array(totalVerts * 2);
+
+  for (let row = 0; row < rows; row++) {
+    const z = originZ + row * spacing;
+    for (let col = 0; col < cols; col++) {
+      const x = originX + col * spacing;
+      const idx = row * cols + col;
+      gpuPositions[idx * 2] = x;
+      gpuPositions[idx * 2 + 1] = z;
+    }
+  }
+
+  // --- Pass 2 (GPU): Sample elevation + moisture for ALL grid cells ---
+  const { elevations, moistures } = await meshCompute.sample(gpuPositions, totalVerts, config);
+
+  // --- Pass 2.5 (CPU): Thermal erosion on full grid ---
+  if (config.erosion > 0) {
+    thermalErode(elevations, cols, rows, config.erosion, seaLevel);
+  }
+
+  // --- Pass 3 (CPU): Cull, compute displaced Y + normals, write vertex data ---
+  // Build gridToVert mapping (only vertices inside the world circle)
+  const gridToVert = new Int32Array(totalVerts);
   gridToVert.fill(-1);
-
-  // Temporary arrays for vertex positions (needed for GPU upload and pass 3)
-  const posXArr = new Float32Array(maxVerts);
-  const posZArr = new Float32Array(maxVerts);
-  const vertCol = new Int32Array(maxVerts);
-  const vertRow = new Int32Array(maxVerts);
-
-  // GPU upload buffer: interleaved [posX, posZ] pairs
-  const gpuPositions = new Float32Array(maxVerts * 2);
-
   let vertCount = 0;
 
   for (let row = 0; row < rows; row++) {
     const z = originZ + row * spacing;
     for (let col = 0; col < cols; col++) {
       const x = originX + col * spacing;
-      if (x * x + z * z > cullRadius2) continue;
-
-      const gridIdx = row * cols + col;
-      gridToVert[gridIdx] = vertCount;
-
-      posXArr[vertCount] = x;
-      posZArr[vertCount] = z;
-      vertCol[vertCount] = col;
-      vertRow[vertCount] = row;
-
-      gpuPositions[vertCount * 2] = x;
-      gpuPositions[vertCount * 2 + 1] = z;
-
-      vertCount++;
+      if (x * x + z * z <= cullRadius2) {
+        gridToVert[row * cols + col] = vertCount++;
+      }
     }
   }
 
-  // --- Pass 2 (GPU): Sample elevation + moisture ---
-  const { elevations, moistures } = await meshCompute.sample(gpuPositions, vertCount, config);
-
-  // --- Pass 3 (CPU): Compute displaced Y + smooth normals ---
-  const displacedY = new Float32Array(vertCount);
-  for (let i = 0; i < vertCount; i++) {
-    displacedY[i] = computeDisplacedY(elevations[i]!, seaLevel, landRange, heightScale);
-  }
-
-  const vertexData = new Float32Array(maxVerts * MESH_VERTEX_STRIDE);
+  const vertexData = new Float32Array(vertCount * MESH_VERTEX_STRIDE);
   const invSpacing2 = 1 / (2 * spacing);
+  let vertIdx = 0;
 
-  for (let i = 0; i < vertCount; i++) {
-    const col = vertCol[i]!;
-    const row = vertRow[i]!;
+  for (let row = 0; row < rows; row++) {
+    const z = originZ + row * spacing;
+    for (let col = 0; col < cols; col++) {
+      const x = originX + col * spacing;
+      const gridIdx = row * cols + col;
+      if (gridToVert[gridIdx]! < 0) continue;
 
-    const leftIdx = col > 0 ? gridToVert[row * cols + (col - 1)]! : -1;
-    const rightIdx = col < cols - 1 ? gridToVert[row * cols + (col + 1)]! : -1;
-    const upIdx = row > 0 ? gridToVert[(row - 1) * cols + col]! : -1;
-    const downIdx = row < rows - 1 ? gridToVert[(row + 1) * cols + col]! : -1;
+      const elev = elevations[gridIdx]!;
+      const y = computeDisplacedY(elev, seaLevel, landRange, heightScale);
 
-    const y = displacedY[i]!;
-    const yLeft = leftIdx >= 0 ? displacedY[leftIdx]! : y;
-    const yRight = rightIdx >= 0 ? displacedY[rightIdx]! : y;
-    const yUp = upIdx >= 0 ? displacedY[upIdx]! : y;
-    const yDown = downIdx >= 0 ? displacedY[downIdx]! : y;
+      // Neighbor elevations from full grid (no gaps — no need for gridToVert lookups)
+      const leftElev = col > 0 ? elevations[gridIdx - 1]! : elev;
+      const rightElev = col < cols - 1 ? elevations[gridIdx + 1]! : elev;
+      const upElev = row > 0 ? elevations[gridIdx - cols]! : elev;
+      const downElev = row < rows - 1 ? elevations[gridIdx + cols]! : elev;
 
-    const dydx = (yRight - yLeft) * invSpacing2;
-    const dydz = (yDown - yUp) * invSpacing2;
-    let nx = -dydx;
-    let ny = 1;
-    let nz = -dydz;
-    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-    nx /= len;
-    ny /= len;
-    nz /= len;
+      const yLeft = computeDisplacedY(leftElev, seaLevel, landRange, heightScale);
+      const yRight = computeDisplacedY(rightElev, seaLevel, landRange, heightScale);
+      const yUp = computeDisplacedY(upElev, seaLevel, landRange, heightScale);
+      const yDown = computeDisplacedY(downElev, seaLevel, landRange, heightScale);
 
-    const off = i * MESH_VERTEX_STRIDE;
-    vertexData[off] = posXArr[i]!;
-    vertexData[off + 1] = posZArr[i]!;
-    vertexData[off + 2] = elevations[i]!;
-    vertexData[off + 3] = moistures[i]!;
-    vertexData[off + 4] = nx;
-    vertexData[off + 5] = ny;
-    vertexData[off + 6] = nz;
+      // Central-difference normals
+      const dydx = (yRight - yLeft) * invSpacing2;
+      const dydz = (yDown - yUp) * invSpacing2;
+      let nx = -dydx;
+      let ny = 1;
+      let nz = -dydz;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      nx /= len;
+      ny /= len;
+      nz /= len;
+
+      const off = vertIdx * MESH_VERTEX_STRIDE;
+      vertexData[off] = x;
+      vertexData[off + 1] = z;
+      vertexData[off + 2] = elev;
+      vertexData[off + 3] = moistures[gridIdx]!;
+      vertexData[off + 4] = nx;
+      vertexData[off + 5] = ny;
+      vertexData[off + 6] = nz;
+      vertIdx++;
+    }
   }
 
   // --- Build index buffer ---

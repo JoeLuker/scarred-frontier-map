@@ -37,9 +37,10 @@ const HASH_SETTLEMENT_CHAOS: i32 = ${BIOME.HASH_SETTLEMENT_CHAOS};
 const HASH_ELEMENT: i32 = ${BIOME.HASH_ELEMENT};
 const HASH_SETTLEMENT_ROLL: i32 = ${BIOME.HASH_SETTLEMENT_ROLL};
 
-// --- Temperature-driven biome threshold shifts (from config.ts TERRAIN) ---
+// --- Temperature-driven biome threshold shifts (Whittaker-style, from config.ts TERRAIN) ---
 const TEMP_DESERT_SHIFT: f32 = ${TERRAIN.TEMP_DESERT_SHIFT};
 const TEMP_FOREST_SHIFT: f32 = ${TERRAIN.TEMP_FOREST_SHIFT};
+const ELEVATION_LAPSE_RATE: f32 = ${TERRAIN.ELEVATION_LAPSE_RATE};
 const MOISTURE_DESERT: f32 = ${TERRAIN.MOISTURE_DESERT};
 const MOISTURE_FOREST: f32 = ${TERRAIN.MOISTURE_FOREST};
 const MOISTURE_MARSH: f32 = ${TERRAIN.MOISTURE_MARSH};
@@ -198,8 +199,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let hill_threshold = field.hill_threshold;
   let is_river = field.is_river;
 
-  // --- BIOME SELECTION with temperature shift ---
-  let temp_shift = config.temperature - 0.5;
+  // --- BIOME SELECTION with Whittaker-style elevation-dependent temperature ---
+  // Higher elevation → colder local temperature → shifts biome thresholds.
+  // Forests retreat from high elevations, tundra/bare terrain takes over.
+  let land_range = 1.0 - sea_level;
+  var norm_elev = 0.0;
+  if (elevation > sea_level && land_range > 0.0) {
+    norm_elev = (elevation - sea_level) / land_range;
+  }
+  let local_temp = config.temperature - norm_elev * ELEVATION_LAPSE_RATE;
+  let temp_shift = local_temp - 0.5;
   let desert_threshold = MOISTURE_DESERT + temp_shift * TEMP_DESERT_SHIFT;
   let forest_threshold = MOISTURE_FOREST + temp_shift * TEMP_FOREST_SHIFT;
   let marsh_threshold = MOISTURE_MARSH - temp_shift * TEMP_FOREST_SHIFT;

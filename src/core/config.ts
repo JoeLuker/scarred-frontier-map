@@ -84,10 +84,6 @@ export const TERRAIN = {
   CONT_FREQ_BASE: 0.25,
   CONT_FREQ_RANGE: 1.5,
 
-  // Ridge exponent: ridgeExp = RIDGE_EXP_BASE + ridgeSharpness * RIDGE_EXP_RANGE
-  RIDGE_EXP_BASE: 0.3,
-  RIDGE_EXP_RANGE: 1.4,
-
   // Erosion suppression: effWeight = weight * (1 - erosion * factor)
   EROSION_RIDGE_FACTOR: 0.5,
   EROSION_DETAIL_FACTOR: 0.9,
@@ -103,9 +99,12 @@ export const TERRAIN = {
   // Valley depth shape: pow(t, VALLEY_EXP_BASE + valleyDepth)
   VALLEY_EXP_BASE: 0.5,
 
-  // Temperature-driven biome threshold shifts
+  // Temperature-driven biome threshold shifts (Whittaker-style)
   TEMP_DESERT_SHIFT: 0.3,
   TEMP_FOREST_SHIFT: 0.2,
+  // Elevation lapse rate: higher elevation → colder local temperature.
+  // At the mountain threshold, effective temperature drops by this much.
+  ELEVATION_LAPSE_RATE: 0.3,
 
   // Flavor sub-thresholds (relative position within biome range)
   DEEP_OCEAN_RATIO: 0.5,
