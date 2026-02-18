@@ -113,27 +113,34 @@ fn vs_main(in: VertexIn) -> VertexOut {
     y += block * vt_pi * 0.015 * hs;
 
   } else if (vt_plane == 4u) {
-    // AIR: two-phase system — smoothing at low intensity, floating islands at high.
-    let median_y = displacement_curve(0.35) * hs;
-    let smooth_t = saturate(vt_pi / 0.4);
-    let lift_t = saturate((vt_pi - 0.3) / 0.5);
-
-    // Smoothing (fades as lift takes over)
-    y = mix(y, median_y, smooth_t * 0.3 * (1.0 - lift_t * 0.5));
-
-    // Floating island selection (noise-driven chunks)
+    // AIR: dual-layer rendering via obj.flags.
+    // Ground layer: smooth + depress where islands lifted from.
+    // Island layer: lift floating chunks, collapse the rest to degenerate triangles.
     let chunk = fbm3(in.pos_xz * 0.008) * 0.7 + value_noise(in.pos_xz * 0.03) * 0.3;
+    let lift_t = saturate((vt_pi - 0.3) / 0.5);
     let threshold = mix(0.75, 0.15, lift_t);
     let is_floating = smoothstep(threshold - 0.05, threshold + 0.05, chunk);
 
-    // Lift height: scales with intensity, varies per chunk
-    let base_lift = 0.08 * hs;
-    let max_lift = 0.25 * hs;
-    let variation = 0.6 + value_noise(in.pos_xz * 0.015 + vec2f(42.0, 13.0)) * 0.8;
-    y += mix(base_lift, max_lift, lift_t) * is_floating * variation;
+    let is_island_layer = (obj.flags & 4u) != 0u;
 
-    // Micro-displacement on floating chunks
-    y += is_floating * value_noise(in.pos_xz * 0.025) * vt_pi * 0.003 * hs;
+    if (is_island_layer) {
+      // Island layer: lift floating chunks, collapse non-floating to degenerate
+      if (is_floating < 0.01) {
+        y = -99999.0; // degenerate — culled by depth
+      } else {
+        let variation = 0.6 + value_noise(in.pos_xz * 0.015 + vec2f(42.0, 13.0)) * 0.8;
+        y += mix(0.08, 0.25, lift_t) * hs * is_floating * variation;
+        // Micro-displacement on floating chunks
+        y += value_noise(in.pos_xz * 0.025) * vt_pi * 0.003 * hs;
+      }
+    } else {
+      // Ground layer: smooth terrain + depress where islands lifted from
+      let median_y = displacement_curve(0.35) * hs;
+      let smooth_t = saturate(vt_pi / 0.4);
+      y = mix(y, median_y, smooth_t * 0.3);
+      // Depression: pull ground down where islands float away
+      y -= is_floating * lift_t * 0.04 * hs;
+    }
 
   } else if (vt_plane == 5u) {
     // POSITIVE: gentle growth uplift
@@ -412,9 +419,9 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     pm.specular_mod = mix(1.0, 0.4, pi);
 
   } else if (plane_type == 4u) {
-    // ── AIR: Wind erosion + floating islands ──
-    // Low intensity: wind-scoured, bleached surfaces.
-    // High intensity: floating chunks get sky-blue ethereal tint + glow.
+    // ── AIR: Wind erosion + floating islands (dual-layer) ──
+    // Ground layer: wind-scoured surfaces + crater marks where islands lifted.
+    // Island layer: ethereal sky-stone material with glow.
     let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
     pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
 
@@ -424,25 +431,36 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     let threshold = mix(0.75, 0.15, lift_t);
     let is_floating = smoothstep(threshold - 0.05, threshold + 0.05, chunk);
 
-    // Base: dust lowland / cloud-white highland
-    let dust = vec3f(0.72, 0.68, 0.58);
-    let cloud_white = vec3f(0.88, 0.90, 0.95);
-    let base_surface = mix(dust, cloud_white, is_high);
+    let is_island_layer = (obj.flags & 4u) != 0u;
 
-    // Floating chunks: sky-blue ethereal tint
-    let sky_tint = vec3f(0.75, 0.85, 0.98);
-    let surface = mix(base_surface, sky_tint, is_floating * lift_t);
-    pm.replace_color = surface;
-    pm.replace_strength = pi * (0.6 + is_floating * lift_t * 0.3);
-
-    // Ethereal glow on floating chunks
-    pm.emission = vec3f(0.3, 0.5, 0.8) * is_floating * lift_t * 0.15;
-
-    pm.roughness_mod = -0.25 * pi;
-    pm.snow_line_shift = -0.2 * pi;
-    pm.ambient_mod = 1.0 + (0.35 + is_floating * lift_t * 0.25) * pi;
-    pm.shadow_mod = mix(1.0, mix(0.6, 0.4, is_floating * lift_t), pi);
-    pm.specular_mod = 1.0 + (0.3 + is_floating * lift_t * 0.4) * pi;
+    if (is_island_layer) {
+      // Island layer: ethereal sky-stone — light, crystalline, glowing
+      let sky_stone = vec3f(0.78, 0.86, 0.96);
+      let crystal = vec3f(0.65, 0.75, 0.92);
+      let surface = mix(sky_stone, crystal, is_high);
+      pm.replace_color = surface;
+      pm.replace_strength = pi * 0.8;
+      pm.emission = vec3f(0.3, 0.5, 0.85) * lift_t * 0.2;
+      pm.roughness_mod = -0.35 * pi;
+      pm.snow_line_shift = -0.3 * pi;
+      pm.ambient_mod = 1.0 + 0.5 * pi;
+      pm.shadow_mod = mix(1.0, 0.35, pi);
+      pm.specular_mod = 1.0 + 0.8 * pi;
+    } else {
+      // Ground layer: wind-scoured + crater dust where islands lifted from
+      let dust = vec3f(0.72, 0.68, 0.58);
+      let cloud_white = vec3f(0.88, 0.90, 0.95);
+      let base_surface = mix(dust, cloud_white, is_high);
+      let crater_dust = vec3f(0.55, 0.50, 0.42);
+      let surface = mix(base_surface, crater_dust, is_floating * lift_t * 0.6);
+      pm.replace_color = surface;
+      pm.replace_strength = pi * (0.6 + is_floating * lift_t * 0.15);
+      pm.roughness_mod = mix(-0.15, 0.2, is_floating * lift_t) * pi;
+      pm.snow_line_shift = -0.2 * pi;
+      pm.ambient_mod = 1.0 + (0.3 - is_floating * lift_t * 0.1) * pi;
+      pm.shadow_mod = mix(1.0, mix(0.6, 0.8, is_floating * lift_t), pi);
+      pm.specular_mod = 1.0 + 0.2 * pi;
+    }
 
   } else if (plane_type == 5u) {
     // ── POSITIVE: Life / radiance ──

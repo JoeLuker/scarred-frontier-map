@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { HexData, PlanarOverlay, WorldGenConfig, TerrainType } from '../../core/types';
+import { HexData, PlanarAlignment, PlanarOverlay, WorldGenConfig, TerrainType } from '../../core/types';
 import { WORLD, TERRAIN, CAMERA, MESH, getTerrainRenderParams } from '../../core/config';
 import { TERRAIN_COLORS, PLANAR_COLORS } from '../theme';
 import { hexToPixel, pixelToHex } from '../../core/geometry';
@@ -178,12 +178,20 @@ export const HexGrid: React.FC<HexGridProps> = ({
           stencilRef: 1,
           renderOrder: 1,
         });
+        scene.addObject('islands', {
+          material: terrainMat,
+          mesh,
+          flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_LAYER,
+          stencilRef: 1,
+          renderOrder: 2,
+          visible: false,
+        });
         scene.addObject('sea', {
           material: seaMat,
           mesh: { vertexBuffer: seaBuffer, vertexCount: 6 },
           flags: OBJECT_FLAGS.IS_SEA,
           stencilRef: 0,
-          renderOrder: 2,
+          renderOrder: 3,
         });
 
         sceneRef.current = scene;
@@ -253,6 +261,15 @@ export const HexGrid: React.FC<HexGridProps> = ({
     hexStateSourceRef.current = hexes;
     hexState.update(hexes);
   }, [hexes]);
+
+  // --- Toggle island layer visibility when Air overlays are present ---
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const islands = scene.getObject('islands');
+    if (!islands) return;
+    islands.visible = planarOverlays.some(o => o.type === PlanarAlignment.AIR);
+  }, [planarOverlays]);
 
   // --- Focus hex ---
   useEffect(() => {
