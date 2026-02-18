@@ -210,18 +210,23 @@ fn iq_fbm(
   var sum_d = vec2f(0.0);
   var amp = 1.0;
   var freq = 1.0;
-  var max_amp = 0.0;
+  var eff_max = 0.0;
 
   for (var i = 0i; i < octaves; i++) {
     let n = smooth_noise_d(x * freq, y * freq, seed + i * FBM_SEED_STRIDE);
     sum_d += vec2f(n.dx, n.dy);
-    sum += amp * n.val / (1.0 + dot(sum_d, sum_d));
-    max_amp += amp;
+    // Suppression factor: steep areas get less fine detail
+    let suppress = 1.0 / (1.0 + dot(sum_d, sum_d));
+    sum += amp * suppress * n.val;
+    // Track effective amplitude so normalization preserves [0,1] range.
+    // Without this, the suppression compresses values toward zero,
+    // pushing most terrain below sea level.
+    eff_max += amp * suppress;
     amp *= gain;
     freq *= lacunarity;
   }
 
-  let inv = 1.0 / max(max_amp, 0.001);
+  let inv = 1.0 / max(eff_max, 0.001);
   return NoiseDeriv(sum * inv, sum_d.x * inv, sum_d.y * inv);
 }
 

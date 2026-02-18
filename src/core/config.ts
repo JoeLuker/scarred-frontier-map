@@ -16,21 +16,21 @@ export const WORLD = {
 } as const;
 
 export const DEFAULT_WORLD_CONFIG: WorldGenConfig = {
-  waterLevel: 0.5,
-  mountainLevel: 0.5,
+  waterLevel: 0.45,
+  mountainLevel: 0.7,
   vegetationLevel: 0.5,
   riverDensity: 0.5,
-  ruggedness: 0.5,
+  ruggedness: 0.6,
   seed: 12345,
   continentScale: 0.5,
   temperature: 0.5,
-  ridgeSharpness: 0.5,
+  ridgeSharpness: 0.7,
   plateauFactor: 0.0,
   coastComplexity: 0.0,
-  erosion: 0.0,
-  valleyDepth: 0.5,
+  erosion: 0.15,
+  valleyDepth: 0.7,
   chaos: 0.0,
-  verticality: 0.5,
+  verticality: 0.8,
 };
 
 // --- Continuous Terrain Field (world-space coordinates) ---
@@ -174,7 +174,7 @@ export const RENDER = {
   ZOOM_BEVEL: 0.4,
   ZOOM_FOG_FILL: 0.5,
   // 3D height
-  HEIGHT_SCALE: 12.0,            // Max height offset as fraction of HEX_SIZE
+  HEIGHT_SCALE: 120.0,           // Max height offset as fraction of HEX_SIZE
   SIDE_DARKEN: 0.3,              // Side face color multiplier at cliff top
   CLIFF_BASE_DARKEN: 0.12,       // Side face color multiplier at cliff base
   BEVEL_INNER: 0.80,             // Bevel highlight starts at this distance from center
