@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { HexData, PlanarOverlay, WorldGenConfig, TerrainType } from '../../core/types';
-import { WORLD, RENDER, TERRAIN, CAMERA, MESH, getTerrainRenderParams } from '../../core/config';
+import { WORLD, TERRAIN, CAMERA, MESH, getTerrainRenderParams } from '../../core/config';
 import { TERRAIN_COLORS, PLANAR_COLORS } from '../theme';
 import { hexToPixel, pixelToHex } from '../../core/geometry';
 import { hexToRgb } from './renderUtils';
@@ -215,14 +215,30 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (showGizmosRef.current && e.button === 0) {
-      const result = onCamMove(e);
-      if (result) {
-        const { worldX, worldY } = result;
-        const handleRadius = WORLD.HEX_SIZE * RENDER.GIZMO_HIT_RADIUS_FACTOR;
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const aspect = rect.width / rect.height;
+        const viewProj = computeViewProjection(aspect);
+        const cfg = worldConfigRef.current;
+        const { seaLevel, heightScale } = getTerrainRenderParams(cfg);
+        const landRange = 1 - seaLevel;
+        const allHexes = hexesRef.current;
+
+        // Screen-space hit radius — matches visual gizmo size
+        const hitRadiusPx = Math.max(12, 800 / camera.current.distance * WORLD.HEX_SIZE);
+
         const clickedOverlay = overlaysRef.current.find(o => {
           const pixel = hexToPixel(o.coordinates.q, o.coordinates.r, WORLD.HEX_SIZE);
-          const dist = Math.sqrt(Math.pow(worldX - pixel.x, 2) + Math.pow(worldY - pixel.y, 2));
-          return dist < handleRadius;
+          const gIdx = hexLookupRef.current.get(`${o.coordinates.q},${o.coordinates.r}`);
+          const gHex = gIdx !== undefined ? allHexes[gIdx] : undefined;
+          const gY = gHex ? computeDisplacedY(gHex.elevation, seaLevel, landRange, heightScale) : 0;
+          const screen = worldToScreen(pixel.x, gY, pixel.y, viewProj, rect.width, rect.height);
+          if (!screen) return false;
+          const dx = mouseX - screen.x;
+          const dy = mouseY - screen.y;
+          return Math.sqrt(dx * dx + dy * dy) < hitRadiusPx;
         });
         if (clickedOverlay) {
           draggingOverlayIdRef.current = clickedOverlay.id;
@@ -236,12 +252,30 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (draggingOverlayIdRef.current && showGizmosRef.current) {
-      const result = onCamMove(e);
-      if (result) {
-        const hexCoords = pixelToHex(result.worldX, result.worldY, WORLD.HEX_SIZE);
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
         const target = overlaysRef.current.find(o => o.id === draggingOverlayIdRef.current);
-        if (target && (target.coordinates.q !== hexCoords.q || target.coordinates.r !== hexCoords.r)) {
-          onModifyOverlay({ ...target, coordinates: { q: hexCoords.q, r: hexCoords.r } });
+        if (target) {
+          // Raycast at the overlay's current terrain elevation for accurate placement
+          const gIdx = hexLookupRef.current.get(`${target.coordinates.q},${target.coordinates.r}`);
+          const gHex = gIdx !== undefined ? hexesRef.current[gIdx] : undefined;
+          const cfg = worldConfigRef.current;
+          const { seaLevel, heightScale } = getTerrainRenderParams(cfg);
+          const landRange = 1 - seaLevel;
+          const planeY = gHex ? computeDisplacedY(gHex.elevation, seaLevel, landRange, heightScale) : 0;
+
+          const hit = screenToGround(
+            e.clientX - rect.left, e.clientY - rect.top,
+            rect.width, rect.height,
+            camera.current, CAMERA.FOV, rect.width / rect.height,
+            planeY,
+          );
+          if (hit) {
+            const hexCoords = pixelToHex(hit.x, hit.z, WORLD.HEX_SIZE);
+            if (target.coordinates.q !== hexCoords.q || target.coordinates.r !== hexCoords.r) {
+              onModifyOverlay({ ...target, coordinates: { q: hexCoords.q, r: hexCoords.r } });
+            }
+          }
         }
       }
       return;

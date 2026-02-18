@@ -37,6 +37,7 @@ const App: React.FC = () => {
   useBridgeReceiver({ hexes, planarOverlays, dispatch, focusRegion });
 
   const [isGenBarOpen, setIsGenBarOpen] = useState(false);
+  const [isPlanesOpen, setIsPlanesOpen] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleOpenGenBar = useCallback(() => {
@@ -113,7 +114,7 @@ const App: React.FC = () => {
           planarOverlays={planarOverlays}
           onModifyOverlay={modifyOverlay}
           onCommitOverlay={commitOverlayModification}
-          showGizmos={planarOverlays.length > 0}
+          showGizmos={planarOverlays.length > 0 && isPlanesOpen}
         />
       </div>
 
@@ -139,6 +140,8 @@ const App: React.FC = () => {
             onAddPlane={handleAddPlane}
             onRemoveOverlay={removeOverlay}
             onModifyOverlay={modifyOverlay}
+            onCommitOverlay={commitOverlayModification}
+            onPlanesOpenChange={setIsPlanesOpen}
           />
         </div>
 

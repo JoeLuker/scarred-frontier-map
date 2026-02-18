@@ -33,6 +33,8 @@ interface WorldSidebarProps {
   onAddPlane: (type: PlanarAlignment) => void;
   onRemoveOverlay: (id: string) => void;
   onModifyOverlay: (overlay: PlanarOverlay) => void;
+  onCommitOverlay: () => void;
+  onPlanesOpenChange?: (isOpen: boolean) => void;
 }
 
 export const WorldSidebar: React.FC<WorldSidebarProps> = ({
@@ -52,12 +54,19 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
   onAddPlane,
   onRemoveOverlay,
   onModifyOverlay,
+  onCommitOverlay,
+  onPlanesOpenChange,
 }) => {
   const [isOpen, setIsOpen] = useState(true);
   const [isRegionsOpen, setIsRegionsOpen] = useState(false);
-  const [isPlanesOpen, setIsPlanesOpen] = useState(true);
+  const [isPlanesOpen, setIsPlanesOpenRaw] = useState(true);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isAddPlaneOpen, setIsAddPlaneOpen] = useState(false);
+
+  const setIsPlanesOpen = (open: boolean) => {
+    setIsPlanesOpenRaw(open);
+    onPlanesOpenChange?.(open);
+  };
 
   const regions = useMemo(() => {
     const regionMap = new Map<string, { id: string; name: string; count: number }>();
@@ -199,6 +208,7 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
                           min="2" max={WORLD.GRID_RADIUS + 5} step="1"
                           value={overlay.radius}
                           onChange={(e) => onModifyOverlay({ ...overlay, radius: parseInt(e.target.value) })}
+                          onPointerUp={() => onCommitOverlay()}
                           className="w-full h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
                         />
                         <div className="flex items-center gap-1 text-[9px] text-slate-600">

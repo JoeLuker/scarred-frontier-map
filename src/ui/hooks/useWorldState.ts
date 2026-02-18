@@ -55,21 +55,35 @@ export const useWorldState = () => {
     };
   }, []);
 
+  // --- Pending overlay modifications ---
+  // Map keyed by overlay ID so multiple overlays can be previewed concurrently.
+  // Survives engine state resets (dispatch/undo/redo) until explicitly committed.
+  const pendingOverlaysRef = useRef<Map<string, PlanarOverlay>>(new Map());
+
+  // Merge engine's committed state with any pending overlay previews
+  const mergeWithPending = useCallback((state: WorldState): WorldState => {
+    const pending = pendingOverlaysRef.current;
+    if (pending.size === 0) return state;
+    const overlays = state.overlays.map(o => pending.get(o.id) ?? o);
+    const hexes = applyOverlaysToMap(state.hexes, overlays);
+    return { ...state, hexes, overlays };
+  }, []);
+
   // --- Dispatch: commit an action to history (async for terrain actions) ---
   const dispatch = useCallback(async (action: HistoryAction) => {
     const eng = engineRef.current;
     if (!eng) return;
     await eng.dispatch(action);
-    setLiveState(eng.state);
-  }, []);
+    setLiveState(mergeWithPending(eng.state));
+  }, [mergeWithPending]);
 
   // --- Undo / Redo ---
   const undo = useCallback(() => {
     const eng = engineRef.current;
     if (!eng) return;
     eng.undo();
-    setLiveState(eng.state);
-  }, []);
+    setLiveState(mergeWithPending(eng.state));
+  }, [mergeWithPending]);
 
   const redo = useCallback(async () => {
     const eng = engineRef.current;
@@ -78,16 +92,16 @@ export const useWorldState = () => {
     if (!eng.redo()) {
       await eng.redoAsync();
     }
-    setLiveState(eng.state);
-  }, []);
+    setLiveState(mergeWithPending(eng.state));
+  }, [mergeWithPending]);
 
   // --- Remove a specific action (selective undo) ---
   const removeAction = useCallback(async (index: number) => {
     const eng = engineRef.current;
     if (!eng) return;
     await eng.removeAction(index);
-    setLiveState(eng.state);
-  }, []);
+    setLiveState(mergeWithPending(eng.state));
+  }, [mergeWithPending]);
 
   // --- Live Preview (no history entry) ---
 
@@ -124,10 +138,8 @@ export const useWorldState = () => {
     setLiveState({ hexes: withOverlays, overlays: committed.overlays, config });
   }, []);
 
-  const pendingOverlayRef = useRef<PlanarOverlay | null>(null);
-
   const modifyOverlay = useCallback((updated: PlanarOverlay) => {
-    pendingOverlayRef.current = updated;
+    pendingOverlaysRef.current.set(updated.id, updated);
     setLiveState(prev => {
       const overlays = prev.overlays.map(o => o.id === updated.id ? updated : o);
       const withOverlays = applyOverlaysToMap(prev.hexes, overlays);
@@ -137,15 +149,18 @@ export const useWorldState = () => {
 
   const cancelPreview = useCallback(() => {
     const eng = engineRef.current;
-    if (eng) setLiveState(eng.state);
-  }, []);
+    if (eng) setLiveState(mergeWithPending(eng.state));
+  }, [mergeWithPending]);
 
   // --- Commit live changes ---
 
   const commitOverlayModification = useCallback(async () => {
-    if (pendingOverlayRef.current) {
-      await dispatch({ type: 'modifyOverlay', overlay: pendingOverlayRef.current });
-      pendingOverlayRef.current = null;
+    const pending = pendingOverlaysRef.current;
+    if (pending.size === 0) return;
+    const entries = Array.from(pending.values());
+    pending.clear();
+    for (const overlay of entries) {
+      await dispatch({ type: 'modifyOverlay', overlay });
     }
   }, [dispatch]);
 
