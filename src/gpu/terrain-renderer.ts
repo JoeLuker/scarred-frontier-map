@@ -570,7 +570,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   var color: vec3f;
 
   if (is_water) {
-    color = water_base_color(in.elevation, in.world_pos.xz);
+    // Blend elevation toward 0 near grid edge so terrain water color
+    // smoothly deepens to match the sea quad (which has elevation=0).
+    let edge_blend = smoothstep(u.grid_radius - 3.0, u.grid_radius + 0.5, hex_dist);
+    let water_elev = mix(in.elevation, 0.0, edge_blend);
+    color = water_base_color(water_elev, in.world_pos.xz);
 
     // Water specular + Fresnel
     let wn1 = (value_noise(in.world_pos.xz * 0.03) - 0.5) * 0.3;
@@ -692,7 +696,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   var grid_opacity = u.hex_grid_opacity;
 
   // Sector boundary borders (thicker lines between tiled hex groups)
-  if (ring_boundary) {
+  if (ring_boundary && u.hex_grid_opacity > 0.0) {
     grid_line = max(grid_line, smoothstep(0.45 - edge_aa * 3.0, 0.45, edge_dist));
     grid_opacity = max(grid_opacity, 0.35);
   }
@@ -846,13 +850,14 @@ function invertMat4(m: Float32Array): Float32Array {
 // --- Uniform buffer layout ---
 // 304 (original) + 64 (inv_view_proj mat4x4f) = 368
 const UNIFORM_SIZE = 368;
-const DEPTH_FORMAT: GPUTextureFormat = 'depth32float';
+const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus-stencil8';
 
 export class TerrainRenderer {
   private device: GPUDevice;
   private context: GPUCanvasContext;
   private pipeline: GPURenderPipeline;
   private skyPipeline: GPURenderPipeline;
+  private seaPipeline: GPURenderPipeline;
   private uniformBuffer: GPUBuffer;
   private bindGroupLayout: GPUBindGroupLayout;
   private bindGroup: GPUBindGroup | null = null;
@@ -874,6 +879,7 @@ export class TerrainRenderer {
     context: GPUCanvasContext,
     pipeline: GPURenderPipeline,
     skyPipeline: GPURenderPipeline,
+    seaPipeline: GPURenderPipeline,
     uniformBuffer: GPUBuffer,
     bindGroupLayout: GPUBindGroupLayout,
     format: GPUTextureFormat,
@@ -884,6 +890,7 @@ export class TerrainRenderer {
     this.context = context;
     this.pipeline = pipeline;
     this.skyPipeline = skyPipeline;
+    this.seaPipeline = seaPipeline;
     this.uniformBuffer = uniformBuffer;
     this.bindGroupLayout = bindGroupLayout;
     this.format = format;
@@ -951,6 +958,11 @@ export class TerrainRenderer {
         depthWriteEnabled: true,
         depthCompare: 'less',
         format: DEPTH_FORMAT,
+        // Write stencil=1 wherever terrain renders — sea pipeline reads this
+        stencilFront: { compare: 'always', passOp: 'replace', failOp: 'keep', depthFailOp: 'keep' },
+        stencilBack: { compare: 'always', passOp: 'replace', failOp: 'keep', depthFailOp: 'keep' },
+        stencilReadMask: 0xFF,
+        stencilWriteMask: 0xFF,
       },
     });
 
@@ -973,12 +985,53 @@ export class TerrainRenderer {
         depthWriteEnabled: false,
         depthCompare: 'always',
         format: DEPTH_FORMAT,
+        stencilFront: { compare: 'always', passOp: 'keep', failOp: 'keep', depthFailOp: 'keep' },
+        stencilBack: { compare: 'always', passOp: 'keep', failOp: 'keep', depthFailOp: 'keep' },
+        stencilWriteMask: 0x00,
       },
     });
 
-    // --- Sea quad vertex buffer (terrain vertex format, drawn with terrain pipeline) ---
-    // Large quad at Y=0 extending far beyond the grid. The terrain fragment shader
-    // renders beyond-grid fragments as deep ocean — same code path, no z-fighting.
+    // --- Sea pipeline (stencil-masked — only draws where terrain didn't render) ---
+    const seaPipeline = device.createRenderPipeline({
+      layout: pipelineLayout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vs_main',
+        buffers: [{
+          arrayStride: MESH_VERTEX_BYTE_STRIDE,
+          stepMode: 'vertex',
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: 'float32x2' },
+            { shaderLocation: 1, offset: 8, format: 'float32' },
+            { shaderLocation: 2, offset: 12, format: 'float32' },
+            { shaderLocation: 3, offset: 16, format: 'float32x3' },
+          ],
+        }],
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_main',
+        targets: [{ format }],
+      },
+      primitive: {
+        topology: 'triangle-list',
+        cullMode: 'none',
+      },
+      depthStencil: {
+        depthWriteEnabled: true,
+        depthCompare: 'less',
+        format: DEPTH_FORMAT,
+        // Only draw where stencil == 0 (no terrain rendered)
+        stencilFront: { compare: 'equal', passOp: 'keep', failOp: 'keep', depthFailOp: 'keep' },
+        stencilBack: { compare: 'equal', passOp: 'keep', failOp: 'keep', depthFailOp: 'keep' },
+        stencilReadMask: 0xFF,
+        stencilWriteMask: 0x00,
+      },
+    });
+
+    // --- Sea quad vertex buffer ---
+    // Large quad at Y=0 extending far beyond the grid. Stencil-masked so it only
+    // renders where terrain mesh didn't draw — zero overlap, zero z-fighting.
     // 6 verts × 7 floats (pos_xz, elevation, moisture, normal_xyz) = 168 bytes.
     const SEA_EXTENT = 100000; // huge — atmospheric scattering fades to sky
     const seaVerts = new Float32Array([
@@ -1011,7 +1064,7 @@ export class TerrainRenderer {
     );
 
     return new TerrainRenderer(
-      device, context, pipeline, skyPipeline, uniformBuffer,
+      device, context, pipeline, skyPipeline, seaPipeline, uniformBuffer,
       bindGroupLayout, format, seaVertexBuffer, dummyHexTexture,
     );
   }
@@ -1122,6 +1175,9 @@ export class TerrainRenderer {
         depthClearValue: 1.0,
         depthLoadOp: 'clear',
         depthStoreOp: 'store',
+        stencilClearValue: 0,
+        stencilLoadOp: 'clear',
+        stencilStoreOp: 'discard',
       },
     });
 
@@ -1130,17 +1186,20 @@ export class TerrainRenderer {
     pass.setBindGroup(0, this.bindGroup);
     pass.draw(3);
 
-    // 2. Sea quad (terrain pipeline — same shader as terrain, renders as deep ocean
-    //    outside grid_radius. Drawn first so terrain wins all depth ties.)
+    // 2. Terrain mesh (writes stencil=1 everywhere it renders)
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
-    pass.setVertexBuffer(0, this.seaVertexBuffer);
-    pass.draw(6);
-
-    // 3. Terrain mesh (overwrites sea where land/water exists inside grid)
+    pass.setStencilReference(1);
     pass.setVertexBuffer(0, this.currentMesh.vertexBuffer);
     pass.setIndexBuffer(this.currentMesh.indexBuffer, 'uint32');
     pass.drawIndexed(this.currentMesh.indexCount);
+
+    // 3. Sea quad (stencil-masked — only fills gaps where terrain didn't render)
+    pass.setPipeline(this.seaPipeline);
+    pass.setBindGroup(0, this.bindGroup);
+    pass.setStencilReference(0);
+    pass.setVertexBuffer(0, this.seaVertexBuffer);
+    pass.draw(6);
 
     pass.end();
 
