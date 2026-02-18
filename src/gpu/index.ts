@@ -1,5 +1,7 @@
 export { initWebGPU, getGpuContext } from './context';
 export { TerrainRenderer, createTerrainShader, invertMat4 } from './terrain-renderer';
+export { Scene } from './scene';
+export { createTerrainMaterial, createSeaMaterial, createSkyMaterial } from './materials';
 export { TerrainMesh, buildTerrainMesh, computeDisplacedY } from './terrain-mesh';
 export { HexStateTexture } from './hex-state-texture';
 export { TerrainCompute, GpuTerrainProvider, terrainFromId, elementFromId, flavorFromId } from './terrain-compute';
@@ -8,5 +10,6 @@ export { getViewProjection, screenToGround, worldToScreen, getEyePosition } from
 export type { OrbitalCamera } from './camera';
 export { TERRAIN_ORDER, OBJECT_FLAGS } from './types';
 export type { GpuContext } from './types';
+export type { SceneMesh, Material, SceneObject } from './scene';
 export type { GpuTerrainResult } from './terrain-compute';
 export type { MeshBuffers } from './terrain-mesh';
