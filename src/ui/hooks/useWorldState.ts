@@ -1,15 +1,21 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { HexData, WorldGenConfig, PlanarOverlay, PlanarAlignment, HistoryAction, WorldState } from '../../core/types';
 import { WorldEngine } from '../../core/engine';
-import { regenerateTerrain } from '../../core/world';
 import { applyOverlaysToMap } from '../../core/planar';
-import { getGpuContext, TerrainCompute, terrainFromId, elementFromId, flavorFromId } from '../../gpu';
+import { getGpuContext, GpuTerrainProvider } from '../../gpu';
 
 export const useWorldState = () => {
-  const engineRef = useRef(WorldEngine.create());
+  const [engine, setEngine] = useState<WorldEngine | null>(null);
+  const engineRef = useRef<WorldEngine | null>(null);
 
   // Live state: what the UI renders. Equals committed state except during preview/drag.
-  const [liveState, setLiveState] = useState<WorldState>(engineRef.current.state);
+  const [liveState, setLiveState] = useState<WorldState>({
+    hexes: [],
+    overlays: [],
+    config: { waterLevel: 0.5, mountainLevel: 0.5, vegetationLevel: 0.5, riverDensity: 0.5,
+      ruggedness: 0.5, seed: 12345, continentScale: 0.5, temperature: 0.5, ridgeSharpness: 0.5,
+      plateauFactor: 0, coastComplexity: 0, erosion: 0, valleyDepth: 0.5, chaos: 0, verticality: 0.5 },
+  });
   const liveStateRef = useRef(liveState);
   liveStateRef.current = liveState;
 
@@ -22,113 +28,101 @@ export const useWorldState = () => {
   const planarOverlays = liveState.overlays;
   const worldConfig = liveState.config;
   const selectedHex = hexes.find(h => h.id === selectedHexId) ?? null;
-  const canUndo = engineRef.current.canUndo;
-  const canRedo = engineRef.current.canRedo;
+  const canUndo = engine?.canUndo ?? false;
+  const canRedo = engine?.canRedo ?? false;
 
-  // --- Dispatch: commit an action to history ---
-  const dispatch = useCallback((action: HistoryAction) => {
-    engineRef.current.dispatch(action);
-    setLiveState(engineRef.current.state);
-  }, []);
+  // --- Async engine initialization ---
 
-  // --- Undo / Redo ---
-  const undo = useCallback(() => {
-    engineRef.current.undo();
-    setLiveState(engineRef.current.state);
-  }, []);
-
-  const redo = useCallback(() => {
-    engineRef.current.redo();
-    setLiveState(engineRef.current.state);
-  }, []);
-
-  // --- Remove a specific action (selective undo) ---
-  const removeAction = useCallback((index: number) => {
-    engineRef.current.removeAction(index);
-    setLiveState(engineRef.current.state);
-  }, []);
-
-  // --- GPU Compute (async init, shared device singleton) ---
-
-  const gpuComputeRef = useRef<TerrainCompute | null>(null);
-  const gpuCoordsCountRef = useRef(0); // Track uploaded coord count
-  const previewGenRef = useRef(0);     // Race condition guard
+  const previewGenRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const ctx = await getGpuContext();
       if (cancelled || !ctx) return;
-      try {
-        const compute = TerrainCompute.create(ctx.device, 20000);
-        // Upload initial hex coordinates
-        const hexes = engineRef.current.hexes;
-        if (hexes.length > 0) {
-          compute.setCoords(hexes.map(h => h.coordinates));
-          gpuCoordsCountRef.current = hexes.length;
-        }
-        gpuComputeRef.current = compute;
-        console.log(`GPU terrain compute initialized (${hexes.length} hexes)`);
-      } catch (err) {
-        console.warn('GPU compute init failed, using CPU fallback:', err);
-      }
+      const provider = GpuTerrainProvider.create(ctx.device, 20000);
+      const e = await WorldEngine.create(provider);
+      if (cancelled) { e.destroy(); return; }
+      engineRef.current = e;
+      setEngine(e);
+      setLiveState(e.state);
+      console.log(`WorldEngine initialized (${e.hexes.length} hexes via GPU)`);
     })();
     return () => {
       cancelled = true;
-      gpuComputeRef.current?.destroy();
-      gpuComputeRef.current = null;
+      engineRef.current?.destroy();
+      engineRef.current = null;
     };
+  }, []);
+
+  // --- Dispatch: commit an action to history (async for terrain actions) ---
+  const dispatch = useCallback(async (action: HistoryAction) => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    await eng.dispatch(action);
+    setLiveState(eng.state);
+  }, []);
+
+  // --- Undo / Redo ---
+  const undo = useCallback(() => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    eng.undo();
+    setLiveState(eng.state);
+  }, []);
+
+  const redo = useCallback(async () => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    // Try sync redo first (non-terrain actions), fall back to async
+    if (!eng.redo()) {
+      await eng.redoAsync();
+    }
+    setLiveState(eng.state);
+  }, []);
+
+  // --- Remove a specific action (selective undo) ---
+  const removeAction = useCallback(async (index: number) => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    await eng.removeAction(index);
+    setLiveState(eng.state);
   }, []);
 
   // --- Live Preview (no history entry) ---
 
-  const previewWorldConfig = useCallback((config: WorldGenConfig, preserveExplored: boolean) => {
-    const committed = engineRef.current.state;
-    const compute = gpuComputeRef.current;
+  const previewWorldConfig = useCallback(async (config: WorldGenConfig, preserveExplored: boolean) => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    const committed = eng.state;
+    if (committed.hexes.length === 0) return;
 
-    if (compute && committed.hexes.length > 0) {
-      // Ensure coords are uploaded (re-upload if hex count changed)
-      if (gpuCoordsCountRef.current !== committed.hexes.length) {
-        compute.setCoords(committed.hexes.map(h => h.coordinates));
-        gpuCoordsCountRef.current = committed.hexes.length;
-      }
+    const gen = ++previewGenRef.current;
+    const results = await eng.computeTerrain(
+      committed.hexes.map(h => h.coordinates),
+      config,
+    );
+    if (gen !== previewGenRef.current) return; // stale
 
-      // GPU async path with race condition guard
-      const gen = ++previewGenRef.current;
-      compute.generate(config, committed.hexes.length).then(results => {
-        if (gen !== previewGenRef.current) return; // stale — newer preview superseded this one
-        if (results.length === 0) return; // skipped (concurrent generate in flight)
-
-        const newHexes = committed.hexes.map((hex, i) => {
-          if (preserveExplored && hex.isExplored) return { ...hex };
-
-          const r = results[i]!;
-          const terrain = terrainFromId(r.terrainId);
-          const element = elementFromId(r.elementId);
-          const flavor = flavorFromId(r.flavorId);
-          return {
-            ...hex,
-            terrain,
-            element,
-            elevation: r.elevation,
-            description: flavor,
-            baseDescription: flavor,
-            baseTerrain: terrain,
-            planarAlignment: PlanarAlignment.MATERIAL,
-            planarIntensity: 0,
-            planarInfluences: [],
-            reactionEmission: null,
-          };
-        });
-        const withOverlays = applyOverlaysToMap(newHexes, committed.overlays);
-        setLiveState({ hexes: withOverlays, overlays: committed.overlays, config });
-      });
-    } else {
-      // CPU sync fallback
-      const regenned = regenerateTerrain(committed.hexes, config, preserveExplored);
-      const withOverlays = applyOverlaysToMap(regenned, committed.overlays);
-      setLiveState({ hexes: withOverlays, overlays: committed.overlays, config });
-    }
+    const newHexes = committed.hexes.map((hex, i) => {
+      if (preserveExplored && hex.isExplored) return { ...hex };
+      const r = results[i]!;
+      return {
+        ...hex,
+        terrain: r.terrain,
+        element: r.element,
+        elevation: r.elevation,
+        description: r.description,
+        baseDescription: r.description,
+        baseTerrain: r.terrain,
+        planarAlignment: PlanarAlignment.MATERIAL,
+        planarIntensity: 0,
+        planarInfluences: [],
+        reactionEmission: null,
+      };
+    });
+    const withOverlays = applyOverlaysToMap(newHexes, committed.overlays);
+    setLiveState({ hexes: withOverlays, overlays: committed.overlays, config });
   }, []);
 
   const pendingOverlayRef = useRef<PlanarOverlay | null>(null);
@@ -143,38 +137,39 @@ export const useWorldState = () => {
   }, []);
 
   const cancelPreview = useCallback(() => {
-    setLiveState(engineRef.current.state);
+    const eng = engineRef.current;
+    if (eng) setLiveState(eng.state);
   }, []);
 
   // --- Commit live changes ---
 
-  const commitOverlayModification = useCallback(() => {
+  const commitOverlayModification = useCallback(async () => {
     if (pendingOverlayRef.current) {
-      dispatch({ type: 'modifyOverlay', overlay: pendingOverlayRef.current });
+      await dispatch({ type: 'modifyOverlay', overlay: pendingOverlayRef.current });
       pendingOverlayRef.current = null;
     }
   }, [dispatch]);
 
   // --- Convenience wrappers ---
 
-  const addOverlay = useCallback((overlay: PlanarOverlay) => {
-    dispatch({ type: 'addOverlay', overlay });
+  const addOverlay = useCallback(async (overlay: PlanarOverlay) => {
+    await dispatch({ type: 'addOverlay', overlay });
   }, [dispatch]);
 
-  const removeOverlay = useCallback((id: string) => {
-    dispatch({ type: 'removeOverlay', overlayId: id });
+  const removeOverlay = useCallback(async (id: string) => {
+    await dispatch({ type: 'removeOverlay', overlayId: id });
   }, [dispatch]);
 
-  const updateHex = useCallback((updatedHex: HexData) => {
-    dispatch({ type: 'updateHex', hexId: updatedHex.id, changes: updatedHex });
+  const updateHex = useCallback(async (updatedHex: HexData) => {
+    await dispatch({ type: 'updateHex', hexId: updatedHex.id, changes: updatedHex });
   }, [dispatch]);
 
-  const revealAllHexes = useCallback(() => {
-    dispatch({ type: 'revealAll' });
+  const revealAllHexes = useCallback(async () => {
+    await dispatch({ type: 'revealAll' });
   }, [dispatch]);
 
-  const importMap = useCallback((newHexes: HexData[]) => {
-    dispatch({ type: 'importMap', hexes: newHexes });
+  const importMap = useCallback(async (newHexes: HexData[]) => {
+    await dispatch({ type: 'importMap', hexes: newHexes });
   }, [dispatch]);
 
   // --- UI ---
@@ -188,10 +183,10 @@ export const useWorldState = () => {
     if (target) setFocusedHex(target);
   }, []);
 
-  const handleHexClick = useCallback((hex: HexData) => {
+  const handleHexClick = useCallback(async (hex: HexData) => {
     if (!hex.isExplored) {
       if (!hex.groupId) return;
-      dispatch({ type: 'revealSector', groupId: hex.groupId });
+      await dispatch({ type: 'revealSector', groupId: hex.groupId });
       return;
     }
     setSelectedHexId(hex.id);
@@ -206,7 +201,7 @@ export const useWorldState = () => {
     planarOverlays,
 
     // History
-    actions: engineRef.current.actions,
+    actions: engine?.actions ?? [],
     canUndo,
     canRedo,
     undo,

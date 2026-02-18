@@ -12,6 +12,7 @@ import {
   buildTerrainMesh,
   computeDisplacedY,
   HexStateTexture,
+  MeshCompute,
   worldToScreen,
   getEyePosition,
   screenToGround,
@@ -79,6 +80,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
   const rendererRef = useRef<TerrainRenderer | null>(null);
   const meshRef = useRef<TerrainMesh | null>(null);
   const hexStateRef = useRef<HexStateTexture | null>(null);
+  const meshComputeRef = useRef<MeshCompute | null>(null);
 
   // Track what mesh was built for (to know when to rebuild)
   const meshConfigRef = useRef<WorldGenConfig | null>(null);
@@ -129,17 +131,20 @@ export const HexGrid: React.FC<HexGridProps> = ({
         const renderer = TerrainRenderer.create(ctx.device, gpuCanvasRef.current);
         const mesh = TerrainMesh.create(ctx.device, 250000);
         const hexState = HexStateTexture.create(ctx.device, WORLD.GRID_RADIUS);
+        const mc = MeshCompute.create(ctx.device, 250000);
 
         rendererRef.current = renderer;
         meshRef.current = mesh;
         hexStateRef.current = hexState;
+        meshComputeRef.current = mc;
 
         renderer.setMesh(mesh);
         renderer.setHexState(hexState);
 
         // Build initial mesh + hex state (effects may have already fired and missed the null refs)
         const cfg = worldConfigRef.current;
-        const buffers = buildTerrainMesh(cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING);
+        const buffers = await buildTerrainMesh(mc, cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING);
+        if (cancelled) return;
         mesh.upload(buffers);
         meshConfigRef.current = cfg;
 
@@ -159,25 +164,32 @@ export const HexGrid: React.FC<HexGridProps> = ({
       meshRef.current = null;
       hexStateRef.current?.destroy();
       hexStateRef.current = null;
+      meshComputeRef.current?.destroy();
+      meshComputeRef.current = null;
     };
   }, []);
 
   // --- Rebuild terrain mesh when world config changes ---
   useEffect(() => {
     const mesh = meshRef.current;
-    if (!mesh) return;
+    const mc = meshComputeRef.current;
+    if (!mesh || !mc) return;
 
     // Skip if config hasn't changed (same reference = same config)
     if (meshConfigRef.current === worldConfig) return;
     meshConfigRef.current = worldConfig;
 
-    // Build mesh on a microtask to not block the UI thread during initial render
+    // Build mesh asynchronously (GPU compute for elevation+moisture)
     const cfg = worldConfig;
+    let cancelled = false;
     requestIdleCallback(() => {
-      const buffers = buildTerrainMesh(cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING);
-      mesh.upload(buffers);
-      console.log(`Terrain mesh: ${buffers.vertexCount} verts, ${buffers.indexCount / 3} tris`);
+      buildTerrainMesh(mc, cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING).then(buffers => {
+        if (cancelled) return;
+        mesh.upload(buffers);
+        console.log(`Terrain mesh: ${buffers.vertexCount} verts, ${buffers.indexCount / 3} tris`);
+      });
     });
+    return () => { cancelled = true; };
   }, [worldConfig]);
 
   // --- Update hex state texture when hex data changes ---

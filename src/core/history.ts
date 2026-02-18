@@ -1,6 +1,6 @@
 import { WorldState, HistoryAction, HexData } from './types';
 import { DEFAULT_WORLD_CONFIG } from './config';
-import { generateWorld, regenerateTerrain, revealSector, revealAll } from './world';
+import { revealSector, revealAll } from './world';
 import { applyOverlaysToMap } from './planar';
 
 export const EMPTY_STATE: WorldState = {
@@ -11,15 +11,9 @@ export const EMPTY_STATE: WorldState = {
 
 export function applyAction(state: WorldState, action: HistoryAction): WorldState {
   switch (action.type) {
-    case 'generateWorld': {
-      const hexes = generateWorld(action.config);
-      return { hexes, overlays: [], config: action.config };
-    }
-    case 'worldConfig': {
-      const regenned = regenerateTerrain(state.hexes, action.config, action.preserveExplored);
-      const hexes = applyOverlaysToMap(regenned, state.overlays);
-      return { hexes, overlays: state.overlays, config: action.config };
-    }
+    case 'generateWorld':
+    case 'worldConfig':
+      throw new Error(`${action.type} requires async dispatch through WorldEngine`);
     case 'revealSector': {
       const revealed = revealSector(action.groupId, state.hexes);
       const hexes = applyOverlaysToMap(revealed, state.overlays);

@@ -1,7 +1,7 @@
 import { WorldGenConfig } from '../core/types';
-import { sampleTerrain } from '../core/terrain';
 import { getTerrainRenderParams } from '../core/config';
 import { MESH_VERTEX_STRIDE } from './types';
+import type { MeshCompute } from './mesh-compute';
 
 export interface MeshBuffers {
   readonly vertices: Float32Array;
@@ -11,7 +11,7 @@ export interface MeshBuffers {
 }
 
 // --- Height displacement ---
-// PARALLEL IMPLEMENTATION: Must match terrain-renderer.ts WGSL karst_height().
+// Must match terrain-renderer.ts WGSL karst_height().
 // Both use smoothstep(0.12, 0.28, h) * pow(h, 0.65). Any change here must
 // be mirrored in the vertex shader, otherwise CPU mesh normals diverge from GPU height.
 
@@ -27,7 +27,6 @@ function karstHeight(h: number): number {
 }
 
 // Layer 1 (Geometry): Pure heightfield displacement. No terrain type awareness.
-// Rivers have elevation = seaLevel (set by sampleTerrain), so they naturally get y=0.
 // Exported for CPU-side elevation queries (hover/selection overlay alignment).
 export function computeDisplacedY(
   elevation: number,
@@ -45,21 +44,20 @@ export function computeDisplacedY(
 /**
  * Build a regular triangle-grid terrain mesh covering a circular world area.
  *
- * Vertices are placed on a regular grid with `spacing` distance apart.
- * Each vertex samples the continuous terrain field for elevation and moisture.
- * Smooth normals are computed from displaced height via central differences.
- * Vertices outside the world circle (gridRadius hexes × hexSize × sqrt(3)) are culled.
- * Triangle pairs fill each grid cell; degenerate triangles at the boundary are skipped.
+ * Pass 1 (CPU): Generate grid positions, boundary culling, build gridToVert mapping + index buffer.
+ * Pass 2 (GPU): Upload positions to MeshCompute → get elevation + moisture arrays.
+ * Pass 3 (CPU): Compute computeDisplacedY() + central-difference normals. Write interleaved vertex buffer.
  *
  * Layer 1 (Geometry): This mesh knows nothing about hexes. Terrain type is resolved
  * per-fragment in the shader via hex state texture lookup (Layer 3).
  */
-export function buildTerrainMesh(
+export async function buildTerrainMesh(
+  meshCompute: MeshCompute,
   config: WorldGenConfig,
   gridRadius: number,
   hexSize: number,
   spacing: number,
-): MeshBuffers {
+): Promise<MeshBuffers> {
   const SQRT3 = Math.sqrt(3);
   const worldRadius = gridRadius * hexSize * SQRT3;
   const cullRadius2 = (worldRadius + spacing * 2) * (worldRadius + spacing * 2);
@@ -72,20 +70,19 @@ export function buildTerrainMesh(
 
   const { seaLevel, landRange, heightScale } = getTerrainRenderParams(config);
 
-  // --- Pass 1: Sample terrain, compute displaced Y, store per-grid-cell data ---
+  // --- Pass 1 (CPU): Generate grid positions, cull by radius, build gridToVert mapping ---
   const maxVerts = cols * rows;
   const gridToVert = new Int32Array(maxVerts);
   gridToVert.fill(-1);
 
-  // Temporary arrays indexed by vertex index
-  const posX = new Float32Array(maxVerts);
-  const posZ = new Float32Array(maxVerts);
-  const displacedY = new Float32Array(maxVerts);
-  const elevations = new Float32Array(maxVerts);
-  const moistures = new Float32Array(maxVerts);
-  // Grid col/row for each vertex (needed for neighbor lookup in pass 2)
+  // Temporary arrays for vertex positions (needed for GPU upload and pass 3)
+  const posXArr = new Float32Array(maxVerts);
+  const posZArr = new Float32Array(maxVerts);
   const vertCol = new Int32Array(maxVerts);
   const vertRow = new Int32Array(maxVerts);
+
+  // GPU upload buffer: interleaved [posX, posZ] pairs
+  const gpuPositions = new Float32Array(maxVerts * 2);
 
   let vertCount = 0;
 
@@ -98,21 +95,27 @@ export function buildTerrainMesh(
       const gridIdx = row * cols + col;
       gridToVert[gridIdx] = vertCount;
 
-      const sample = sampleTerrain(x, z, config);
-
-      posX[vertCount] = x;
-      posZ[vertCount] = z;
-      elevations[vertCount] = sample.elevation;
-      moistures[vertCount] = sample.moisture;
-      displacedY[vertCount] = computeDisplacedY(sample.elevation, seaLevel, landRange, heightScale);
+      posXArr[vertCount] = x;
+      posZArr[vertCount] = z;
       vertCol[vertCount] = col;
       vertRow[vertCount] = row;
+
+      gpuPositions[vertCount * 2] = x;
+      gpuPositions[vertCount * 2 + 1] = z;
 
       vertCount++;
     }
   }
 
-  // --- Pass 2: Compute smooth normals from displaced height central differences ---
+  // --- Pass 2 (GPU): Sample elevation + moisture ---
+  const { elevations, moistures } = await meshCompute.sample(gpuPositions, vertCount, config);
+
+  // --- Pass 3 (CPU): Compute displaced Y + smooth normals ---
+  const displacedY = new Float32Array(vertCount);
+  for (let i = 0; i < vertCount; i++) {
+    displacedY[i] = computeDisplacedY(elevations[i]!, seaLevel, landRange, heightScale);
+  }
+
   const vertexData = new Float32Array(maxVerts * MESH_VERTEX_STRIDE);
   const invSpacing2 = 1 / (2 * spacing);
 
@@ -120,7 +123,6 @@ export function buildTerrainMesh(
     const col = vertCol[i]!;
     const row = vertRow[i]!;
 
-    // Look up neighbors in grid space
     const leftIdx = col > 0 ? gridToVert[row * cols + (col - 1)]! : -1;
     const rightIdx = col < cols - 1 ? gridToVert[row * cols + (col + 1)]! : -1;
     const upIdx = row > 0 ? gridToVert[(row - 1) * cols + col]! : -1;
@@ -132,10 +134,8 @@ export function buildTerrainMesh(
     const yUp = upIdx >= 0 ? displacedY[upIdx]! : y;
     const yDown = downIdx >= 0 ? displacedY[downIdx]! : y;
 
-    // Central difference gradient → normal
     const dydx = (yRight - yLeft) * invSpacing2;
     const dydz = (yDown - yUp) * invSpacing2;
-    // Normal = normalize(-dydx, 1, -dydz)
     let nx = -dydx;
     let ny = 1;
     let nz = -dydz;
@@ -145,8 +145,8 @@ export function buildTerrainMesh(
     nz /= len;
 
     const off = i * MESH_VERTEX_STRIDE;
-    vertexData[off] = posX[i]!;
-    vertexData[off + 1] = posZ[i]!;
+    vertexData[off] = posXArr[i]!;
+    vertexData[off + 1] = posZArr[i]!;
     vertexData[off + 2] = elevations[i]!;
     vertexData[off + 3] = moistures[i]!;
     vertexData[off + 4] = nx;

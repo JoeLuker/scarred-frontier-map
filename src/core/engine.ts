@@ -1,29 +1,64 @@
-import { HexData, WorldGenConfig, PlanarOverlay, HistoryAction, WorldState } from './types';
+import { HexData, WorldGenConfig, PlanarOverlay, HistoryAction, WorldState, TerrainType, TerrainElement, AxialCoord } from './types';
 import { DEFAULT_WORLD_CONFIG } from './config';
-import { applyAction, EMPTY_STATE, replayFrom } from './history';
+import { applyAction, EMPTY_STATE } from './history';
+import { generateWorldGrid, mergeTerrain } from './world';
+import { applyOverlaysToMap } from './planar';
+
+// --- TerrainProvider: dependency-inversion interface (no GPU imports in core) ---
+
+export interface TerrainResult {
+  readonly terrain: TerrainType;
+  readonly element: TerrainElement;
+  readonly elevation: number;
+  readonly description: string;
+}
+
+export interface TerrainProvider {
+  setCoords(coords: ReadonlyArray<AxialCoord>): void;
+  generate(config: WorldGenConfig, hexCount: number, forceNoRiver?: boolean): Promise<TerrainResult[]>;
+  destroy(): void;
+}
 
 /**
- * Pure state machine for world history. No React, no GPU — just actions, cache, and queries.
- * Synchronous. Suitable for headless tests, CLI tools, and scripted scenarios.
+ * Async state machine for world history. Terrain actions delegate to GPU via TerrainProvider.
+ * Non-terrain actions (overlay, reveal, updateHex) remain synchronous.
+ * Undo/redo are sync cache navigation — no GPU round-trip.
  */
 export class WorldEngine {
   private _actions: HistoryAction[];
-  private _cache: WorldState[];       // cache[i] = state after actions[0..i]
+  private _cache: WorldState[];
   private _redoStack: HistoryAction[];
-  private _hexLookup: Map<string, number>;  // "q,r" → index in hexes[]
+  private _hexLookup: Map<string, number>;
+  private _provider: TerrainProvider;
 
-  private constructor(actions: HistoryAction[], cache: WorldState[], redoStack: HistoryAction[]) {
+  private constructor(
+    provider: TerrainProvider,
+    actions: HistoryAction[],
+    cache: WorldState[],
+    redoStack: HistoryAction[],
+  ) {
+    this._provider = provider;
     this._actions = actions;
     this._cache = cache;
     this._redoStack = redoStack;
     this._hexLookup = WorldEngine._buildLookup(this.state.hexes);
   }
 
-  static create(initialConfig?: WorldGenConfig): WorldEngine {
+  /**
+   * Create a new engine: generates the initial world grid, fills terrain via GPU.
+   */
+  static async create(provider: TerrainProvider, initialConfig?: WorldGenConfig): Promise<WorldEngine> {
     const config = initialConfig ?? DEFAULT_WORLD_CONFIG;
+    const grid = generateWorldGrid(config);
+
+    // Upload coords and generate terrain via GPU
+    provider.setCoords(grid.map(h => h.coordinates));
+    const results = await provider.generate(config, grid.length);
+    const hexes = mergeTerrain(grid, results);
+
     const action: HistoryAction = { type: 'generateWorld', config };
-    const state = applyAction(EMPTY_STATE, action);
-    return new WorldEngine([action], [state], []);
+    const state: WorldState = { hexes, overlays: [], config };
+    return new WorldEngine(provider, [action], [state], []);
   }
 
   private static _buildLookup(hexes: readonly HexData[]): Map<string, number> {
@@ -39,11 +74,69 @@ export class WorldEngine {
     this._hexLookup = WorldEngine._buildLookup(this.state.hexes);
   }
 
+  // --- Internal: generate world (full regeneration) ---
+
+  private async _generateWorld(config: WorldGenConfig): Promise<WorldState> {
+    const grid = generateWorldGrid(config);
+    this._provider.setCoords(grid.map(h => h.coordinates));
+    const results = await this._provider.generate(config, grid.length);
+    const hexes = mergeTerrain(grid, results);
+    return { hexes, overlays: [], config };
+  }
+
+  // --- Internal: regenerate terrain on existing grid ---
+
+  private async _regenTerrain(
+    state: WorldState,
+    config: WorldGenConfig,
+    preserveExplored: boolean,
+  ): Promise<WorldState> {
+    const currentHexes = state.hexes;
+
+    // Upload coords (may have changed if hex count differs)
+    this._provider.setCoords(currentHexes.map(h => h.coordinates));
+    const results = await this._provider.generate(config, currentHexes.length);
+
+    const newHexes = currentHexes.map((hex, i) => {
+      if (preserveExplored && hex.isExplored) return { ...hex };
+      const r = results[i]!;
+      return {
+        ...hex,
+        terrain: r.terrain,
+        element: r.element,
+        elevation: r.elevation,
+        description: r.description,
+        baseDescription: r.description,
+        baseTerrain: r.terrain,
+        planarAlignment: hex.planarAlignment,
+        planarIntensity: 0,
+        planarInfluences: [],
+        reactionEmission: null,
+      };
+    });
+
+    const withOverlays = applyOverlaysToMap(newHexes, state.overlays);
+    return { hexes: withOverlays, overlays: state.overlays, config };
+  }
+
+  // --- Internal: apply action (async for terrain, sync otherwise) ---
+
+  private async _applyActionAsync(state: WorldState, action: HistoryAction): Promise<WorldState> {
+    switch (action.type) {
+      case 'generateWorld':
+        return this._generateWorld(action.config);
+      case 'worldConfig':
+        return this._regenTerrain(state, action.config, action.preserveExplored);
+      default:
+        return applyAction(state, action);
+    }
+  }
+
   // --- Core state machine ---
 
-  dispatch(action: HistoryAction): void {
+  async dispatch(action: HistoryAction): Promise<void> {
     const prevState = this._cache[this._cache.length - 1] ?? EMPTY_STATE;
-    const newState = applyAction(prevState, action);
+    const newState = await this._applyActionAsync(prevState, action);
     this._actions.push(action);
     this._cache.push(newState);
     this._redoStack = [];
@@ -62,7 +155,15 @@ export class WorldEngine {
   redo(): boolean {
     if (this._redoStack.length === 0) return false;
     const action = this._redoStack.shift()!;
+    // Redo for terrain actions is handled by re-dispatching async
+    // But for cache-based redo, we need the state. For now, sync redo
+    // only works for non-terrain actions. Terrain redo falls through.
     const prevState = this._cache[this._cache.length - 1] ?? EMPTY_STATE;
+    if (action.type === 'generateWorld' || action.type === 'worldConfig') {
+      // Terrain actions can't be sync redo'd — push back and return false
+      this._redoStack.unshift(action);
+      return false;
+    }
     const newState = applyAction(prevState, action);
     this._actions.push(action);
     this._cache.push(newState);
@@ -70,15 +171,48 @@ export class WorldEngine {
     return true;
   }
 
-  removeAction(index: number): void {
+  async redoAsync(): Promise<boolean> {
+    if (this._redoStack.length === 0) return false;
+    const action = this._redoStack.shift()!;
+    const prevState = this._cache[this._cache.length - 1] ?? EMPTY_STATE;
+    const newState = await this._applyActionAsync(prevState, action);
+    this._actions.push(action);
+    this._cache.push(newState);
+    this._rebuildLookup();
+    return true;
+  }
+
+  async removeAction(index: number): Promise<void> {
     if (index <= 0 || index >= this._actions.length) return;
     this._actions.splice(index, 1);
     const baseState = this._cache[index - 1] ?? EMPTY_STATE;
-    const replayedCache = replayFrom(baseState, this._actions, index);
+
+    // Async replay from splice point
+    const newCache: WorldState[] = [];
+    let state = baseState;
+    for (let i = index; i < this._actions.length; i++) {
+      const action = this._actions[i];
+      if (!action) break;
+      state = await this._applyActionAsync(state, action);
+      newCache.push(state);
+    }
+
     this._cache.splice(index);
-    this._cache.push(...replayedCache);
+    this._cache.push(...newCache);
     this._redoStack = [];
     this._rebuildLookup();
+  }
+
+  /**
+   * Compute terrain without committing to history. Used for live preview (slider drag).
+   */
+  async computeTerrain(
+    coords: ReadonlyArray<AxialCoord>,
+    config: WorldGenConfig,
+    forceNoRiver?: boolean,
+  ): Promise<TerrainResult[]> {
+    this._provider.setCoords(coords);
+    return this._provider.generate(config, coords.length, forceNoRiver);
   }
 
   // --- State queries (readonly) ---
@@ -113,36 +247,36 @@ export class WorldEngine {
 
   // --- Convenience wrappers (delegate to dispatch) ---
 
-  addOverlay(overlay: PlanarOverlay): void {
-    this.dispatch({ type: 'addOverlay', overlay });
+  async addOverlay(overlay: PlanarOverlay): Promise<void> {
+    await this.dispatch({ type: 'addOverlay', overlay });
   }
 
-  removeOverlay(id: string): void {
-    this.dispatch({ type: 'removeOverlay', overlayId: id });
+  async removeOverlay(id: string): Promise<void> {
+    await this.dispatch({ type: 'removeOverlay', overlayId: id });
   }
 
-  modifyOverlay(overlay: PlanarOverlay): void {
-    this.dispatch({ type: 'modifyOverlay', overlay });
+  async modifyOverlay(overlay: PlanarOverlay): Promise<void> {
+    await this.dispatch({ type: 'modifyOverlay', overlay });
   }
 
-  revealSector(groupId: string): void {
-    this.dispatch({ type: 'revealSector', groupId });
+  async revealSector(groupId: string): Promise<void> {
+    await this.dispatch({ type: 'revealSector', groupId });
   }
 
-  revealAll(): void {
-    this.dispatch({ type: 'revealAll' });
+  async revealAll(): Promise<void> {
+    await this.dispatch({ type: 'revealAll' });
   }
 
-  updateHex(hexId: string, changes: Partial<HexData>): void {
-    this.dispatch({ type: 'updateHex', hexId, changes });
+  async updateHex(hexId: string, changes: Partial<HexData>): Promise<void> {
+    await this.dispatch({ type: 'updateHex', hexId, changes });
   }
 
-  setWorldConfig(config: WorldGenConfig, preserveExplored: boolean): void {
-    this.dispatch({ type: 'worldConfig', config, preserveExplored });
+  async setWorldConfig(config: WorldGenConfig, preserveExplored: boolean): Promise<void> {
+    await this.dispatch({ type: 'worldConfig', config, preserveExplored });
   }
 
-  importMap(hexes: HexData[]): void {
-    this.dispatch({ type: 'importMap', hexes });
+  async importMap(hexes: HexData[]): Promise<void> {
+    await this.dispatch({ type: 'importMap', hexes });
   }
 
   // --- Hex queries ---
@@ -159,5 +293,9 @@ export class WorldEngine {
 
   findHexes(predicate: (hex: HexData) => boolean): HexData[] {
     return this.state.hexes.filter(predicate);
+  }
+
+  destroy(): void {
+    this._provider.destroy();
   }
 }

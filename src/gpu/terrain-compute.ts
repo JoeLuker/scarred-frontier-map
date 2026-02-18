@@ -1,6 +1,8 @@
 import { TERRAIN, BIOME, WORLD } from '../core/config';
-import { WorldGenConfig } from '../core/types';
+import { WorldGenConfig, AxialCoord } from '../core/types';
 import { terrainFromId, elementFromId, flavorFromId } from './types';
+import { createTerrainNoiseWGSL } from './terrain-noise.wgsl';
+import type { TerrainProvider, TerrainResult } from '../core/engine';
 
 // --- Terrain result from GPU readback ---
 
@@ -11,68 +13,12 @@ export interface GpuTerrainResult {
   readonly elevation: number;
 }
 
-// --- Generate WGSL shader with constants baked in from config.ts ---
+// --- Generate WGSL shader: shared noise + hex-specific biome classification ---
 
 function createTerrainShader(): string {
-  return /* wgsl */ `
-// ============================================================
-// Terrain Compute Shader — mirrors src/core/terrain.ts + biome.ts
-// PARALLEL IMPLEMENTATION: This WGSL code replicates the CPU terrain pipeline
-// for GPU-accelerated preview. Both must produce identical output for the same
-// inputs. The authoritative logic lives in core/terrain.ts and core/biome.ts;
-// this shader is a manual port. Changes to terrain generation MUST be applied
-// to both CPU and GPU paths.
-// Constants baked from src/core/config.ts at init time.
-// Terrain type IDs must match gpu/types.ts TERRAIN_ORDER (single source of truth).
-// ============================================================
+  return createTerrainNoiseWGSL() + /* wgsl */ `
 
-// --- Terrain field constants (from config.ts TERRAIN object, world-space) ---
-const CONTINENTAL_SCALE: f32 = ${TERRAIN.CONTINENTAL_SCALE};
-const RIDGE_SCALE: f32 = ${TERRAIN.RIDGE_SCALE};
-const DETAIL_SCALE: f32 = ${TERRAIN.DETAIL_SCALE};
-const CONTINENTAL_WEIGHT: f32 = ${TERRAIN.CONTINENTAL_WEIGHT};
-const RIDGE_WEIGHT: f32 = ${TERRAIN.RIDGE_WEIGHT};
-const DETAIL_WEIGHT: f32 = ${TERRAIN.DETAIL_WEIGHT};
-const SEA_LEVEL_MIN: f32 = ${TERRAIN.SEA_LEVEL_MIN};
-const SEA_LEVEL_RANGE: f32 = ${TERRAIN.SEA_LEVEL_RANGE};
-const MOUNTAIN_THRESHOLD_BASE: f32 = ${TERRAIN.MOUNTAIN_THRESHOLD_BASE};
-const MOUNTAIN_THRESHOLD_RANGE: f32 = ${TERRAIN.MOUNTAIN_THRESHOLD_RANGE};
-const HILL_OFFSET: f32 = ${TERRAIN.HILL_OFFSET};
-const MOISTURE_SCALE: f32 = ${TERRAIN.MOISTURE_SCALE};
-const MOISTURE_NOISE_WEIGHT: f32 = ${TERRAIN.MOISTURE_NOISE_WEIGHT};
-const COASTAL_WEIGHT: f32 = ${TERRAIN.COASTAL_WEIGHT};
-const VEG_BIAS_WEIGHT: f32 = ${TERRAIN.VEG_BIAS_WEIGHT};
-const RIVER_SCALE: f32 = ${TERRAIN.RIVER_SCALE};
-const RIVER_WARP_AMOUNT: f32 = ${TERRAIN.RIVER_WARP_AMOUNT};
-const RIVER_SENSITIVITY: f32 = ${TERRAIN.RIVER_SENSITIVITY};
-const RIVER_MIN_ELEV: f32 = ${TERRAIN.RIVER_MIN_ELEV};
-const RIVER_HIGH_ELEV: f32 = ${TERRAIN.RIVER_HIGH_ELEV};
-const MOISTURE_DESERT: f32 = ${TERRAIN.MOISTURE_DESERT};
-const MOISTURE_MARSH: f32 = ${TERRAIN.MOISTURE_MARSH};
-const MOISTURE_FOREST: f32 = ${TERRAIN.MOISTURE_FOREST};
-const COAST_NOISE_SCALE: f32 = ${TERRAIN.COAST_NOISE_SCALE};
-const DOMAIN_WARP_SCALE: f32 = ${TERRAIN.DOMAIN_WARP_SCALE};
-const DOMAIN_WARP_MAX: f32 = ${TERRAIN.DOMAIN_WARP_MAX};
-const WARP_COORD_OFFSET: f32 = ${TERRAIN.WARP_COORD_OFFSET};
-const CONT_FREQ_BASE: f32 = ${TERRAIN.CONT_FREQ_BASE};
-const CONT_FREQ_RANGE: f32 = ${TERRAIN.CONT_FREQ_RANGE};
-const RIDGE_EXP_BASE: f32 = ${TERRAIN.RIDGE_EXP_BASE};
-const RIDGE_EXP_RANGE: f32 = ${TERRAIN.RIDGE_EXP_RANGE};
-const EROSION_RIDGE_FACTOR: f32 = ${TERRAIN.EROSION_RIDGE_FACTOR};
-const EROSION_DETAIL_FACTOR: f32 = ${TERRAIN.EROSION_DETAIL_FACTOR};
-const COAST_AMPLITUDE: f32 = ${TERRAIN.COAST_AMPLITUDE};
-const COAST_MIN_SEA_LEVEL: f32 = ${TERRAIN.COAST_MIN_SEA_LEVEL};
-const PLATEAU_BANDS_MIN: f32 = ${TERRAIN.PLATEAU_BANDS_MIN};
-const PLATEAU_BANDS_RANGE: f32 = ${TERRAIN.PLATEAU_BANDS_RANGE};
-const VALLEY_EXP_BASE: f32 = ${TERRAIN.VALLEY_EXP_BASE};
-const TEMP_DESERT_SHIFT: f32 = ${TERRAIN.TEMP_DESERT_SHIFT};
-const TEMP_FOREST_SHIFT: f32 = ${TERRAIN.TEMP_FOREST_SHIFT};
-const DEEP_OCEAN_RATIO: f32 = ${TERRAIN.DEEP_OCEAN_RATIO};
-const SNOW_MOISTURE: f32 = ${TERRAIN.SNOW_MOISTURE};
-const RIVER_WARP_FREQ: f32 = ${TERRAIN.RIVER_WARP_FREQ};
-const RIVER_WARP_OFFSET: f32 = ${TERRAIN.RIVER_WARP_OFFSET};
-
-// --- Per-hex constants (from config.ts BIOME object) ---
+// --- Per-hex biome constants (from config.ts BIOME object) ---
 const SETTLEMENT_BASE_SCORE: f32 = ${BIOME.SETTLEMENT_BASE_SCORE};
 const SETTLEMENT_PLAIN_BONUS: f32 = ${BIOME.SETTLEMENT_PLAIN_BONUS};
 const SETTLEMENT_HILL_BONUS: f32 = ${BIOME.SETTLEMENT_HILL_BONUS};
@@ -90,6 +36,15 @@ const GLOBAL_RESOURCE: f32 = ${BIOME.GLOBAL_RESOURCE};
 const HASH_SETTLEMENT_CHAOS: i32 = ${BIOME.HASH_SETTLEMENT_CHAOS};
 const HASH_ELEMENT: i32 = ${BIOME.HASH_ELEMENT};
 const HASH_SETTLEMENT_ROLL: i32 = ${BIOME.HASH_SETTLEMENT_ROLL};
+
+// --- Temperature-driven biome threshold shifts (from config.ts TERRAIN) ---
+const TEMP_DESERT_SHIFT: f32 = ${TERRAIN.TEMP_DESERT_SHIFT};
+const TEMP_FOREST_SHIFT: f32 = ${TERRAIN.TEMP_FOREST_SHIFT};
+const MOISTURE_DESERT: f32 = ${TERRAIN.MOISTURE_DESERT};
+const MOISTURE_FOREST: f32 = ${TERRAIN.MOISTURE_FOREST};
+const MOISTURE_MARSH: f32 = ${TERRAIN.MOISTURE_MARSH};
+const DEEP_OCEAN_RATIO: f32 = ${TERRAIN.DEEP_OCEAN_RATIO};
+const SNOW_MOISTURE: f32 = ${TERRAIN.SNOW_MOISTURE};
 
 // Terrain type IDs (must match src/gpu/types.ts TERRAIN_ORDER)
 const T_WATER: u32 = 0u;
@@ -129,7 +84,8 @@ const F_WILDERNESS: u32 = 15u;
 
 // --- Buffers ---
 
-struct Config {
+struct HexConfig {
+  // TerrainParams fields (same layout)
   seed: i32,
   water_level: f32,
   mountain_level: f32,
@@ -137,8 +93,6 @@ struct Config {
   river_density: f32,
   ruggedness: f32,
   force_no_river: u32,
-  hex_count: u32,
-  hex_size: f32,
   continent_scale: f32,
   temperature: f32,
   ridge_sharpness: f32,
@@ -147,19 +101,22 @@ struct Config {
   erosion: f32,
   valley_depth: f32,
   chaos: f32,
+  _tp_pad: u32,
+  // Hex-specific fields
+  hex_count: u32,
+  hex_size: f32,
   _pad0: u32,
   _pad1: u32,
-  _pad2: u32,
 }
 
 struct HexResult {
   terrain: u32,
   element: u32,
   flavor: u32,
-  elevation_bits: u32, // f32 elevation stored as bitcast<u32>
+  elevation_bits: u32,
 }
 
-@group(0) @binding(0) var<uniform> config: Config;
+@group(0) @binding(0) var<uniform> config: HexConfig;
 @group(0) @binding(1) var<storage, read> coords: array<vec2i>;
 @group(0) @binding(2) var<storage, read_write> results: array<HexResult>;
 
@@ -174,63 +131,7 @@ fn hex_to_pixel(q: i32, r: i32, hex_size: f32) -> vec2f {
 }
 
 // ============================================================
-// Noise functions — exact port of src/core/noise.ts
-// ============================================================
-
-fn hash(x: i32, y: i32, seed: i32) -> u32 {
-  var h = bitcast<u32>(seed) ^ (bitcast<u32>(x) * 374761393u) ^ (bitcast<u32>(y) * 668265263u);
-  h = (h ^ (h >> 13u)) * 1274126177u;
-  return h ^ (h >> 16u);
-}
-
-fn smooth_noise(x: f32, y: f32, seed: i32) -> f32 {
-  let fx = floor(x);
-  let fy = floor(y);
-  let ix = i32(fx);
-  let iy = i32(fy);
-
-  // Full 32-bit range normalization (mirrors core/noise.ts hashNorm)
-  let bl = f32(hash(ix, iy, seed)) / 4294967296.0;
-  let br = f32(hash(ix + 1i, iy, seed)) / 4294967296.0;
-  let tl = f32(hash(ix, iy + 1i, seed)) / 4294967296.0;
-  let tr = f32(hash(ix + 1i, iy + 1i, seed)) / 4294967296.0;
-
-  let tx = x - fx;
-  let ty = y - fy;
-  let wx = tx * tx * (3.0 - 2.0 * tx);
-  let wy = ty * ty * (3.0 - 2.0 * ty);
-
-  let b = bl + wx * (br - bl);
-  let t = tl + wx * (tr - tl);
-  return b + wy * (t - b);
-}
-
-// Per-octave seed stride for FBM decorrelation (must match core/noise.ts FBM_SEED_STRIDE)
-const FBM_SEED_STRIDE: i32 = 31;
-
-fn fbm2(x: f32, y: f32, seed: i32) -> f32 {
-  let o0 = smooth_noise(x, y, seed);
-  let o1 = smooth_noise(x * 2.0, y * 2.0, seed + FBM_SEED_STRIDE) * 0.5;
-  return (o0 + o1) / 1.5;
-}
-
-fn fbm3(x: f32, y: f32, seed: i32) -> f32 {
-  let o0 = smooth_noise(x, y, seed);
-  let o1 = smooth_noise(x * 2.0, y * 2.0, seed + FBM_SEED_STRIDE) * 0.5;
-  let o2 = smooth_noise(x * 4.0, y * 4.0, seed + FBM_SEED_STRIDE * 2) * 0.25;
-  return (o0 + o1 + o2) / 1.75;
-}
-
-fn fbm4(x: f32, y: f32, seed: i32) -> f32 {
-  let o0 = smooth_noise(x, y, seed);
-  let o1 = smooth_noise(x * 2.0, y * 2.0, seed + FBM_SEED_STRIDE) * 0.5;
-  let o2 = smooth_noise(x * 4.0, y * 4.0, seed + FBM_SEED_STRIDE * 2) * 0.25;
-  let o3 = smooth_noise(x * 8.0, y * 8.0, seed + FBM_SEED_STRIDE * 3) * 0.125;
-  return (o0 + o1 + o2 + o3) / 1.875;
-}
-
-// ============================================================
-// Element & Settlement — exact port of biome.ts helpers
+// Element & Settlement — per-hex classification
 // ============================================================
 
 fn calculate_element(terrain: u32, q: i32, r: i32, seed: i32) -> u32 {
@@ -262,8 +163,17 @@ fn calculate_settlement_score(terrain: u32, q: i32, r: i32, seed: i32) -> f32 {
   return score;
 }
 
+fn get_terrain_params() -> TerrainParams {
+  return TerrainParams(
+    config.seed, config.water_level, config.mountain_level, config.vegetation_level,
+    config.river_density, config.ruggedness, config.force_no_river, config.continent_scale,
+    config.temperature, config.ridge_sharpness, config.plateau_factor, config.coast_complexity,
+    config.erosion, config.valley_depth, config.chaos, 0u,
+  );
+}
+
 // ============================================================
-// Main compute kernel — samples terrain in world-space
+// Main compute kernel
 // ============================================================
 
 @compute @workgroup_size(64)
@@ -276,97 +186,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let r = coord.y;
   let seed = config.seed;
 
-  // Convert hex coords to world-space pixel coords
   let wp = hex_to_pixel(q, r, config.hex_size);
 
-  // --- 0. CHAOS DOMAIN WARP ---
-  var sx = wp.x;
-  var sy = wp.y;
-  if (config.chaos > 0.0) {
-    let warp_amount = config.chaos * DOMAIN_WARP_MAX;
-    let wx = fbm3(wp.x * DOMAIN_WARP_SCALE, wp.y * DOMAIN_WARP_SCALE, seed + 900i);
-    let wy = fbm3(wp.x * DOMAIN_WARP_SCALE + WARP_COORD_OFFSET, wp.y * DOMAIN_WARP_SCALE + WARP_COORD_OFFSET, seed + 900i);
-    sx = wp.x + (wx - 0.5) * warp_amount;
-    sy = wp.y + (wy - 0.5) * warp_amount;
-  }
+  // Sample continuous terrain field
+  let tp = get_terrain_params();
+  let field = sample_terrain_field(wp.x, wp.y, tp);
+  var elevation = field.elevation;
+  let moisture = field.moisture;
+  let sea_level = field.sea_level;
+  let mt_threshold = field.mountain_threshold;
+  let hill_threshold = field.hill_threshold;
+  let is_river = field.is_river;
 
-  // --- 1. LAYERED ELEVATION (world-space sampling) ---
-  let cont_freq = CONTINENTAL_SCALE * (CONT_FREQ_BASE + config.continent_scale * CONT_FREQ_RANGE);
-  let continental = fbm4(sx * cont_freq, sy * cont_freq, seed);
-  let ridge_raw = fbm3(sx * RIDGE_SCALE, sy * RIDGE_SCALE, seed + 200i);
-  let ridge_exp = RIDGE_EXP_BASE + config.ridge_sharpness * RIDGE_EXP_RANGE;
-  let ridge = pow(1.0 - abs(2.0 * ridge_raw - 1.0), ridge_exp);
-  let detail = fbm2(sx * DETAIL_SCALE, sy * DETAIL_SCALE, seed + 400i);
-
-  // Erosion: suppress ridge and detail weights
-  let eff_ridge_weight = RIDGE_WEIGHT * (1.0 - config.erosion * EROSION_RIDGE_FACTOR);
-  let eff_detail_weight = DETAIL_WEIGHT * (1.0 - config.erosion * EROSION_DETAIL_FACTOR);
-
-  var elevation = clamp(
-    continental * CONTINENTAL_WEIGHT
-    + ridge * config.mountain_level * eff_ridge_weight
-    + detail * config.ruggedness * eff_detail_weight,
-    0.0, 1.0
-  );
-
-  // --- 2. THRESHOLDS ---
-  let base_sea_level = SEA_LEVEL_MIN + config.water_level * SEA_LEVEL_RANGE;
-  let mt_threshold = MOUNTAIN_THRESHOLD_BASE - config.mountain_level * MOUNTAIN_THRESHOLD_RANGE;
-  let hill_threshold = mt_threshold - HILL_OFFSET;
-
-  // --- 2b. COAST COMPLEXITY ---
-  var sea_level = base_sea_level;
-  if (config.coast_complexity > 0.0) {
-    let coast_noise = fbm2(sx * COAST_NOISE_SCALE, sy * COAST_NOISE_SCALE, seed + 1100i) - 0.5;
-    sea_level = max(COAST_MIN_SEA_LEVEL, base_sea_level + coast_noise * config.coast_complexity * COAST_AMPLITUDE);
-  }
-
-  // --- 2c. PLATEAU QUANTIZATION ---
-  if (config.plateau_factor > 0.0) {
-    let bands = PLATEAU_BANDS_MIN + (1.0 - config.plateau_factor) * PLATEAU_BANDS_RANGE;
-    let quantized = round(elevation * bands) / bands;
-    let blend = config.plateau_factor * config.plateau_factor;
-    elevation = elevation * (1.0 - blend) + quantized * blend;
-  }
-
-  // --- 2d. VALLEY DEPTH ---
-  let midpoint = (sea_level + mt_threshold) * 0.5;
-  if (elevation > sea_level && elevation < midpoint) {
-    let vrange = midpoint - sea_level;
-    if (vrange > 0.0) {
-      let t = (elevation - sea_level) / vrange;
-      let shaped = pow(t, VALLEY_EXP_BASE + config.valley_depth);
-      elevation = sea_level + shaped * vrange;
-    }
-  }
-
-  // --- 3. MOISTURE (elevation-aware, world-space sampling) ---
-  let moisture_noise = fbm3(sx * MOISTURE_SCALE, sy * MOISTURE_SCALE, seed + 600i);
-  let elev_range = mt_threshold - sea_level;
-  var coastal_prox = 0.0;
-  if (elev_range > 0.0) {
-    coastal_prox = clamp(1.0 - (elevation - sea_level) / elev_range, 0.0, 1.0);
-  }
-  let moisture = clamp(
-    moisture_noise * MOISTURE_NOISE_WEIGHT
-    + coastal_prox * COASTAL_WEIGHT
-    + config.vegetation_level * VEG_BIAS_WEIGHT,
-    0.0, 1.0
-  );
-
-  // --- 4. RIVERS (world-space sampling) ---
-  let rwx = sx * RIVER_SCALE;
-  let rwy = sy * RIVER_SCALE;
-  let warp_x = fbm2(rwx * RIVER_WARP_FREQ, rwy * RIVER_WARP_FREQ, seed + 800i) * RIVER_WARP_AMOUNT;
-  let warp_y = fbm2(rwx * RIVER_WARP_FREQ + RIVER_WARP_OFFSET, rwy * RIVER_WARP_FREQ + RIVER_WARP_OFFSET, seed + 800i) * RIVER_WARP_AMOUNT;
-  let river_noise = fbm2(rwx + warp_x, rwy + warp_y, seed + 700i);
-  let river_valley = abs(river_noise - 0.5) * 2.0;
-  let is_river = (config.force_no_river == 0u)
-    && (river_valley < config.river_density * RIVER_SENSITIVITY)
-    && (elevation > sea_level + RIVER_MIN_ELEV)
-    && (elevation < mt_threshold - RIVER_HIGH_ELEV);
-
-  // --- 5. BIOME SELECTION with temperature shift ---
+  // --- BIOME SELECTION with temperature shift ---
   let temp_shift = config.temperature - 0.5;
   let desert_threshold = MOISTURE_DESERT + temp_shift * TEMP_DESERT_SHIFT;
   let forest_threshold = MOISTURE_FOREST + temp_shift * TEMP_FOREST_SHIFT;
@@ -386,8 +218,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   } else if (is_river) {
     terrain = T_WATER;
     flavor = F_RIVER;
-    // Rivers carry flat elevation: geometry layer doesn't need terrain type to flatten them.
-    elevation = sea_level;
   } else if (elevation > hill_threshold) {
     terrain = T_HILL;
     if (moisture > forest_threshold) { flavor = F_WOODED_HILLS; }
@@ -412,7 +242,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
 
-  // --- 6. ELEMENT & SETTLEMENT (per-hex, uses integer coords) ---
+  // --- ELEMENT & SETTLEMENT ---
   let element = calculate_element(terrain, q, r, seed);
   let sroll = f32(hash(q, r, seed + HASH_SETTLEMENT_ROLL)) / 4294967296.0;
 
@@ -431,7 +261,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 // --- Compute pipeline ---
 
-// Config buffer: 17 active fields + 3 padding = 20 × 4 = 80 bytes (16-byte aligned)
+// HexConfig buffer: 16 TerrainParams fields + 4 hex-specific = 20 × 4 = 80 bytes
 const CONFIG_BUFFER_SIZE = 80;
 
 export class TerrainCompute {
@@ -444,7 +274,7 @@ export class TerrainCompute {
   private bindGroupLayout: GPUBindGroupLayout;
   private bindGroup: GPUBindGroup;
   private hexCount: number;
-  private generating = false;
+  private _pending: Promise<GpuTerrainResult[]> | null = null;
 
   private constructor(
     device: GPUDevice,
@@ -489,19 +319,16 @@ export class TerrainCompute {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // Coords: vec2<i32> per hex = 8 bytes each
     const coordBuffer = device.createBuffer({
       size: maxHexes * 8,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
-    // Results: 4 × u32 per hex = 16 bytes each
     const resultBuffer = device.createBuffer({
       size: maxHexes * 16,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
 
-    // Readback buffer (mappable)
     const readbackBuffer = device.createBuffer({
       size: maxHexes * 16,
       usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
@@ -526,7 +353,6 @@ export class TerrainCompute {
   setCoords(coords: ReadonlyArray<{ readonly q: number; readonly r: number }>): void {
     const count = coords.length;
 
-    // Grow buffers if needed
     if (count > this.hexCount) {
       this.coordBuffer.destroy();
       this.resultBuffer.destroy();
@@ -547,7 +373,6 @@ export class TerrainCompute {
         usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
       });
 
-      // Recreate bind group with new buffers
       this.bindGroup = this.device.createBindGroup({
         layout: this.bindGroupLayout,
         entries: [
@@ -558,7 +383,6 @@ export class TerrainCompute {
       });
     }
 
-    // Upload coordinate data
     const data = new Int32Array(count * 2);
     for (let i = 0; i < count; i++) {
       const c = coords[i]!;
@@ -570,20 +394,25 @@ export class TerrainCompute {
 
   /**
    * Dispatch compute and read back results.
-   * Returns one GpuTerrainResult per hex (same order as setCoords).
+   * Serializes concurrent calls: if a generate is in flight, awaits it first.
    */
   async generate(
     worldConfig: WorldGenConfig,
     hexCount: number,
     forceNoRiver: boolean = false,
   ): Promise<GpuTerrainResult[]> {
-    // Prevent overlapping mapAsync calls
-    if (this.generating) return [];
-    this.generating = true;
+    // Serialize: wait for any pending generate to finish
+    if (this._pending) {
+      await this._pending;
+    }
+    const promise = this._generate(worldConfig, hexCount, forceNoRiver);
+    this._pending = promise;
     try {
-      return await this._generate(worldConfig, hexCount, forceNoRiver);
+      return await promise;
     } finally {
-      this.generating = false;
+      if (this._pending === promise) {
+        this._pending = null;
+      }
     }
   }
 
@@ -592,34 +421,38 @@ export class TerrainCompute {
     hexCount: number,
     forceNoRiver: boolean,
   ): Promise<GpuTerrainResult[]> {
-    // Upload config (80 bytes: 17 fields + 3 padding)
+    // Upload config (80 bytes: 16 TerrainParams fields + 4 hex-specific)
     const configData = new ArrayBuffer(CONFIG_BUFFER_SIZE);
     const i32View = new Int32Array(configData);
     const f32View = new Float32Array(configData);
     const u32View = new Uint32Array(configData);
 
-    i32View[0] = worldConfig.seed;                 // seed (i32)
-    f32View[1] = worldConfig.waterLevel;            // water_level
-    f32View[2] = worldConfig.mountainLevel;         // mountain_level
-    f32View[3] = worldConfig.vegetationLevel;       // vegetation_level
-    f32View[4] = worldConfig.riverDensity;          // river_density
-    f32View[5] = worldConfig.ruggedness;            // ruggedness
-    u32View[6] = forceNoRiver ? 1 : 0;             // force_no_river
-    u32View[7] = hexCount;                          // hex_count
-    f32View[8] = WORLD.HEX_SIZE;                    // hex_size
-    f32View[9] = worldConfig.continentScale;        // continent_scale
-    f32View[10] = worldConfig.temperature;          // temperature
-    f32View[11] = worldConfig.ridgeSharpness;       // ridge_sharpness
-    f32View[12] = worldConfig.plateauFactor;        // plateau_factor
-    f32View[13] = worldConfig.coastComplexity;      // coast_complexity
-    f32View[14] = worldConfig.erosion;              // erosion
-    f32View[15] = worldConfig.valleyDepth;          // valley_depth
-    f32View[16] = worldConfig.chaos;                // chaos
-    // [17], [18], [19] = padding (zeroed by ArrayBuffer)
+    // TerrainParams layout (first 16 fields)
+    i32View[0] = worldConfig.seed;
+    f32View[1] = worldConfig.waterLevel;
+    f32View[2] = worldConfig.mountainLevel;
+    f32View[3] = worldConfig.vegetationLevel;
+    f32View[4] = worldConfig.riverDensity;
+    f32View[5] = worldConfig.ruggedness;
+    u32View[6] = forceNoRiver ? 1 : 0;
+    f32View[7] = worldConfig.continentScale;
+    f32View[8] = worldConfig.temperature;
+    f32View[9] = worldConfig.ridgeSharpness;
+    f32View[10] = worldConfig.plateauFactor;
+    f32View[11] = worldConfig.coastComplexity;
+    f32View[12] = worldConfig.erosion;
+    f32View[13] = worldConfig.valleyDepth;
+    f32View[14] = worldConfig.chaos;
+    u32View[15] = 0; // _tp_pad
+
+    // Hex-specific fields
+    u32View[16] = hexCount;
+    f32View[17] = WORLD.HEX_SIZE;
+    u32View[18] = 0; // _pad0
+    u32View[19] = 0; // _pad1
 
     this.device.queue.writeBuffer(this.configBuffer, 0, configData);
 
-    // Dispatch compute
     const workgroups = Math.ceil(hexCount / 64);
     const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginComputePass();
@@ -628,7 +461,6 @@ export class TerrainCompute {
     pass.dispatchWorkgroups(workgroups);
     pass.end();
 
-    // Copy results to readback buffer
     encoder.copyBufferToBuffer(
       this.resultBuffer, 0,
       this.readbackBuffer, 0,
@@ -636,7 +468,6 @@ export class TerrainCompute {
     );
     this.device.queue.submit([encoder.finish()]);
 
-    // Read back
     await this.readbackBuffer.mapAsync(GPUMapMode.READ, 0, hexCount * 16);
     const range = this.readbackBuffer.getMappedRange(0, hexCount * 16);
     const mapped = new Uint32Array(range);
@@ -648,7 +479,7 @@ export class TerrainCompute {
         terrainId: mapped[i * 4]!,
         elementId: mapped[i * 4 + 1]!,
         flavorId: mapped[i * 4 + 2]!,
-        elevation: elevView.getFloat32((i * 4 + 3) * 4, true), // little-endian
+        elevation: elevView.getFloat32((i * 4 + 3) * 4, true),
       };
     }
 
@@ -661,6 +492,38 @@ export class TerrainCompute {
     this.coordBuffer.destroy();
     this.resultBuffer.destroy();
     this.readbackBuffer.destroy();
+  }
+}
+
+// --- GpuTerrainProvider: adapts TerrainCompute to TerrainProvider interface ---
+
+export class GpuTerrainProvider implements TerrainProvider {
+  private compute: TerrainCompute;
+
+  private constructor(compute: TerrainCompute) {
+    this.compute = compute;
+  }
+
+  static create(device: GPUDevice, maxHexes: number): GpuTerrainProvider {
+    return new GpuTerrainProvider(TerrainCompute.create(device, maxHexes));
+  }
+
+  setCoords(coords: ReadonlyArray<AxialCoord>): void {
+    this.compute.setCoords(coords);
+  }
+
+  async generate(config: WorldGenConfig, hexCount: number, forceNoRiver?: boolean): Promise<TerrainResult[]> {
+    const gpuResults = await this.compute.generate(config, hexCount, forceNoRiver ?? false);
+    return gpuResults.map(r => ({
+      terrain: terrainFromId(r.terrainId),
+      element: elementFromId(r.elementId),
+      elevation: r.elevation,
+      description: flavorFromId(r.flavorId),
+    }));
+  }
+
+  destroy(): void {
+    this.compute.destroy();
   }
 }
 

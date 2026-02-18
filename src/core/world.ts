@@ -1,12 +1,16 @@
-import { HexData, WorldGenConfig, PlanarAlignment } from './types';
+import { HexData, WorldGenConfig, PlanarAlignment, TerrainType, TerrainElement } from './types';
 import { WORLD } from './config';
 import { getSectorID } from './geometry';
-import { getBiomeAt } from './biome';
+import type { TerrainResult } from './engine';
 
 // --- Public API ---
 
-/** Generate a contiguous hex grid with terrain from noise. Pure function. */
-export const generateWorld = (config: WorldGenConfig): HexData[] => {
+/**
+ * Generate a contiguous hex grid with placeholder terrain values.
+ * Terrain sampling is done later via GPU (TerrainProvider).
+ * Pure function — no noise evaluation.
+ */
+export const generateWorldGrid = (config: WorldGenConfig): HexData[] => {
   const radius = WORLD.GRID_RADIUS;
   const startRadius = WORLD.START_RADIUS;
   const ringWidth = WORLD.RING_WIDTH;
@@ -17,20 +21,19 @@ export const generateWorld = (config: WorldGenConfig): HexData[] => {
     const r2 = Math.min(radius, -q + radius);
     for (let r = r1; r <= r2; r++) {
       const dist = (Math.abs(q) + Math.abs(q + r) + Math.abs(r)) / 2;
-      const { terrain, element, flavor, elevation } = getBiomeAt(q, r, config);
       const sector = getSectorID(q, r, ringWidth);
 
       hexes.push({
         id: `HEX-${q}_${r}`,
         groupId: `SECTOR-${sector.q}_${sector.r}`,
-        terrain,
-        element,
-        elevation,
+        terrain: TerrainType.EMPTY,
+        element: TerrainElement.STANDARD,
+        elevation: 0,
         coordinates: { q, r },
         isExplored: dist <= startRadius,
-        description: flavor,
-        baseDescription: flavor,
-        baseTerrain: terrain,
+        description: '',
+        baseDescription: '',
+        baseTerrain: TerrainType.EMPTY,
         notes: '',
         planarAlignment: PlanarAlignment.MATERIAL,
         planarIntensity: 0,
@@ -43,59 +46,21 @@ export const generateWorld = (config: WorldGenConfig): HexData[] => {
   return hexes;
 };
 
-/** Regenerate unexplored terrain with new config. Pure function. */
-export const regenerateUnexplored = (
-  currentHexes: readonly HexData[],
-  config: WorldGenConfig,
-): HexData[] => {
-  return currentHexes.map(hex => {
-    if (hex.isExplored) return { ...hex };
-
-    const { terrain, element, flavor, elevation } = getBiomeAt(hex.coordinates.q, hex.coordinates.r, config);
-
-    return {
-      ...hex,
-      terrain,
-      element,
-      elevation,
-      description: flavor,
-      baseDescription: flavor,
-      baseTerrain: terrain,
-      planarAlignment: PlanarAlignment.MATERIAL,
-      planarIntensity: 0,
-      planarInfluences: [],
-      reactionEmission: null,
-    };
-  });
-};
-
 /**
- * Regenerate terrain for all hexes with a new config. Pure function.
- * Always preserves isExplored state (fog never changes).
- * When preserveExploredTerrain is true, explored hexes keep their current terrain.
+ * Merge GPU terrain results into a hex grid.
+ * Sets terrain, element, elevation, description, baseTerrain, baseDescription.
  */
-export const regenerateTerrain = (
-  currentHexes: readonly HexData[],
-  config: WorldGenConfig,
-  preserveExploredTerrain: boolean,
-): HexData[] => {
-  return currentHexes.map(hex => {
-    if (preserveExploredTerrain && hex.isExplored) return { ...hex };
-
-    const { terrain, element, flavor, elevation } = getBiomeAt(hex.coordinates.q, hex.coordinates.r, config);
-
+export const mergeTerrain = (grid: HexData[], results: TerrainResult[]): HexData[] => {
+  return grid.map((hex, i) => {
+    const r = results[i]!;
     return {
       ...hex,
-      terrain,
-      element,
-      elevation,
-      description: flavor,
-      baseDescription: flavor,
-      baseTerrain: terrain,
-      planarAlignment: PlanarAlignment.MATERIAL,
-      planarIntensity: 0,
-      planarInfluences: [],
-      reactionEmission: null,
+      terrain: r.terrain,
+      element: r.element,
+      elevation: r.elevation,
+      description: r.description,
+      baseDescription: r.description,
+      baseTerrain: r.terrain,
     };
   });
 };

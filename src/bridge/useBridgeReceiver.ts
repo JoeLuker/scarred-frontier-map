@@ -6,7 +6,7 @@ import type { MapCommand } from './types';
 export interface BridgeActions {
   hexes: HexData[];
   planarOverlays: PlanarOverlay[];
-  dispatch: (action: HistoryAction) => void;
+  dispatch: (action: HistoryAction) => Promise<void>;
   focusRegion: (groupId: string) => void;
 }
 
@@ -81,11 +81,13 @@ export function useBridgeReceiver(actions: BridgeActions): void {
 
         const current = actionsRef.current;
 
-        // Dispatch history actions
+        // Dispatch history actions (async — terrain actions need GPU)
         const historyActions = commandToActions(cmd, current.hexes);
-        for (const action of historyActions) {
-          current.dispatch(action);
-        }
+        (async () => {
+          for (const action of historyActions) {
+            await current.dispatch(action);
+          }
+        })();
 
         // Handle UI-only commands
         if (cmd.command === 'focusRegion') {
