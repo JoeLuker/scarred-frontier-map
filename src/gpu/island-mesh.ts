@@ -48,8 +48,8 @@ export interface IslandRenderParams {
 }
 
 // Underside profile constants
-const BASE_THICKNESS = 0.012;    // Fraction of heightScale — max envelope depth at island center
-const STALACTITE_AMP = 0.008;    // Fraction of heightScale — stalactite protrusion depth
+const BASE_THICKNESS = 0.06;     // Fraction of heightScale — max cone depth at island center
+const STALACTITE_AMP = 0.006;    // Fraction of heightScale — subtle rocky noise on cone surface
 
 // Must match terrain-mesh.ts displacementCurve (also in VS)
 function displacementCurve(h: number): number {
@@ -242,10 +242,10 @@ export function buildIslandMesh(
     const topY = smoothedY + liftHeight;
     topYGrid[i] = topY;
 
-    // Underside: taper envelope from component-aware distance field.
-    // depth^1.5 gives steeper taper at edges, wider plateau in center.
+    // Underside: cone envelope from component-aware distance field.
+    // Linear taper: 0 at edge, 1 at center — inverted cone shape.
     const d = depth[i]!;
-    const envelope = d * Math.sqrt(d); // d^1.5
+    const envelope = d;
 
     // Per-component scale: cap depth so island can't be taller than it is wide
     const comp = componentOf[i]!;
