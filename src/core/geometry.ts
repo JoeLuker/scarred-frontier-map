@@ -75,7 +75,7 @@ export const axialRound = (q: number, r: number): AxialCoord => {
     rr = -rq - ry;
   }
 
-  return { q: rq, r: rr };
+  return { q: rq || 0, r: rr || 0 };
 };
 
 export const getHexDistance = (a: AxialCoord, b: AxialCoord): number => {
