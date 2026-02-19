@@ -1,7 +1,7 @@
 /**
  * Shared WGSL functions for render-time noise and hex lookup.
- * Single source of truth for: hash2, value_noise, fbm3, pixel_to_hex,
- * lookup_hex_state, and packed channel decode.
+ * Single source of truth for: hash2, gradient_noise (aliased as value_noise),
+ * fbm3, pixel_to_hex, lookup_hex_state, and packed channel decode.
  *
  * Used by terrain-renderer.ts (vertex+fragment) and island-compute.ts (compute).
  * INTENTIONALLY DIFFERENT from terrain-noise.wgsl.ts (which mirrors core/noise.ts
@@ -30,15 +30,33 @@ fn hash2(p: vec2f) -> f32 {
   return fract((p3.x + p3.y) * p3.z);
 }
 
-fn value_noise(p: vec2f) -> f32 {
+// Gradient noise (Perlin-style): dot-product of pseudo-random gradient vectors
+// with offset vectors, eliminating the lattice alignment artifacts of value noise.
+// Quintic hermite (C2 continuous) for smooth curvature — no visible grid lines.
+// Output remapped from [-0.5, 0.5] to [0, 1] for drop-in compatibility.
+fn gradient_noise(p: vec2f) -> f32 {
   let i = floor(p);
   let f = fract(p);
-  let u = f * f * (3.0 - 2.0 * f); // smoothstep hermite
-  let a = hash2(i);
-  let b = hash2(i + vec2f(1.0, 0.0));
-  let c = hash2(i + vec2f(0.0, 1.0));
-  let d = hash2(i + vec2f(1.0, 1.0));
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // quintic hermite (C2)
+
+  // Convert hash to angle, derive gradient vector via trig
+  let a = hash2(i) * 6.2831853;
+  let b = hash2(i + vec2f(1.0, 0.0)) * 6.2831853;
+  let c = hash2(i + vec2f(0.0, 1.0)) * 6.2831853;
+  let d = hash2(i + vec2f(1.0, 1.0)) * 6.2831853;
+
+  // Dot product of gradient with offset from each corner
+  let va = dot(vec2f(cos(a), sin(a)), f);
+  let vb = dot(vec2f(cos(b), sin(b)), f - vec2f(1.0, 0.0));
+  let vc = dot(vec2f(cos(c), sin(c)), f - vec2f(0.0, 1.0));
+  let vd = dot(vec2f(cos(d), sin(d)), f - vec2f(1.0, 1.0));
+
+  return mix(mix(va, vb, u.x), mix(vc, vd, u.x), u.y) * 0.5 + 0.5;
+}
+
+// Backward-compatible alias — all existing callers use this name.
+fn value_noise(p: vec2f) -> f32 {
+  return gradient_noise(p);
 }
 
 fn fbm3(p: vec2f) -> f32 {
@@ -46,7 +64,7 @@ fn fbm3(p: vec2f) -> f32 {
   var amp = 0.5;
   var pos = p;
   for (var i = 0; i < 3; i++) {
-    val += amp * value_noise(pos);
+    val += amp * gradient_noise(pos);
     pos *= 2.03;
     amp *= 0.5;
   }
