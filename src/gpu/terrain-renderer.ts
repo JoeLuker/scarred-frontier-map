@@ -138,7 +138,11 @@ fn vs_main(in: VertexIn) -> VertexOut {
     // AIR: dual-layer rendering via obj.flags.
     // Both layers: smooth ground base. Island layer lifts uniformly;
     // fragment shader discards non-floating fragments.
-    let chunk = fbm3(in.pos_xz * 0.008) * 0.7 + value_noise(in.pos_xz * 0.03) * 0.3;
+    // Fragmentation controls chunk noise frequency: 0=huge landmass, 1=tiny patches
+    let frag = vt_state.r;
+    let base_freq = 0.003 * pow(8.0, frag);
+    let detail_freq = base_freq * 3.75;
+    let chunk = fbm3(in.pos_xz * base_freq) * 0.7 + value_noise(in.pos_xz * detail_freq) * 0.3;
     let lift_t = saturate((vt_pi - 0.3) / 0.5);
     let threshold = mix(0.75, 0.15, lift_t);
     let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
@@ -468,7 +472,10 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
 
       // Recompute chunk noise for crater marks (ground layer only)
-      let chunk = fbm3(wn * 0.008) * 0.7 + value_noise(wn * 0.03) * 0.3;
+      let fs_frag = hex_state.r;
+      let fs_base_freq = 0.003 * pow(8.0, fs_frag);
+      let fs_detail_freq = fs_base_freq * 3.75;
+      let chunk = fbm3(wn * fs_base_freq) * 0.7 + value_noise(wn * fs_detail_freq) * 0.3;
       let threshold = mix(0.75, 0.15, lift_t);
       let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
 

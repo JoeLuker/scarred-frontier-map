@@ -130,6 +130,7 @@ export const useWorldState = () => {
         baseTerrain: r.terrain,
         planarAlignment: PlanarAlignment.MATERIAL,
         planarIntensity: 0,
+        planarFragmentation: 0.5,
         planarInfluences: [],
         reactionEmission: null,
       };

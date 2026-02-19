@@ -64,6 +64,7 @@ export class WorldEngine {
       radius: WORLD.GRID_RADIUS,
       intensity: positiveDefaults.intensity,
       falloff: positiveDefaults.falloff,
+      fragmentation: positiveDefaults.fragmentation,
     };
     const overlays = [defaultOverlay];
     const hexesWithOverlay = applyOverlaysToMap(hexes, overlays);
@@ -120,6 +121,7 @@ export class WorldEngine {
         baseTerrain: r.terrain,
         planarAlignment: hex.planarAlignment,
         planarIntensity: 0,
+        planarFragmentation: 0.5,
         planarInfluences: [],
         reactionEmission: null,
       };

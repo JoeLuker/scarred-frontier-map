@@ -124,6 +124,25 @@ export const PlanarManager: React.FC<PlanarManagerProps> = ({
                 />
               </div>
 
+              {overlay.type === PlanarAlignment.AIR && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
+                    <span>Islands</span>
+                    <span className="flex gap-1.5 items-center">
+                      <span className="text-slate-600 font-normal normal-case">{overlay.fragmentation <= 0.3 ? 'huge' : overlay.fragmentation <= 0.7 ? 'mixed' : 'tiny'}</span>
+                      {Math.round(overlay.fragmentation * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0" max="1" step="0.01"
+                    value={overlay.fragmentation}
+                    onChange={(e) => onModify({ ...overlay, fragmentation: parseFloat(e.target.value) })}
+                    className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
+                  />
+                </div>
+              )}
+
               <div className="flex justify-between text-[10px] text-slate-500">
                 <span>POS: {Math.round(overlay.coordinates.q)}, {Math.round(overlay.coordinates.r)}</span>
                 <div className="flex items-center gap-1 text-sky-400">

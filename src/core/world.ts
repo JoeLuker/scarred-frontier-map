@@ -34,6 +34,7 @@ export const generateWorldGrid = (config: WorldGenConfig): HexData[] => {
         notes: '',
         planarAlignment: PlanarAlignment.MATERIAL,
         planarIntensity: 0,
+        planarFragmentation: 0.5,
         planarInfluences: [],
         reactionEmission: null,
       });

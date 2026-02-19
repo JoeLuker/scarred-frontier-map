@@ -69,6 +69,7 @@ const App: React.FC = () => {
       radius: defaults.radius,
       intensity: defaults.intensity,
       falloff: defaults.falloff,
+      fragmentation: defaults.fragmentation,
     });
   }, [focusedHex, addOverlay]);
 

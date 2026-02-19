@@ -127,8 +127,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     return;
   }
 
+  // Fragmentation controls chunk noise frequency — must match terrain-renderer.ts
+  let frag = hex_state.r;
+  let base_freq = 0.003 * pow(8.0, frag);
+  let detail_freq = base_freq * 3.75;
+
   // Chunk noise — same as vertex shader Air branch
-  let chunk = fbm3(pos * 0.008) * 0.7 + value_noise(pos * 0.03) * 0.3;
+  let chunk = fbm3(pos * base_freq) * 0.7 + value_noise(pos * detail_freq) * 0.3;
   let lift_t = saturate((planar_intensity - 0.3) / 0.5);
   let threshold = mix(0.75, 0.15, lift_t);
   let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
