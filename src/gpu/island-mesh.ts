@@ -36,8 +36,8 @@ export interface IslandRenderParams {
 }
 
 // Thickness constants
-const BASE_THICKNESS = 0.012;  // Fraction of heightScale
-const NOISE_AMP = 0.004;       // Fraction of heightScale for rocky noise
+const BASE_THICKNESS = 0.045;  // Fraction of heightScale — visible depth from the side
+const NOISE_AMP = 0.015;       // Fraction of heightScale for rocky noise on underside
 const NOISE_FREQ = 0.06;       // World-space frequency for underside noise
 
 // Must match terrain-mesh.ts displacementCurve (also in VS)
@@ -45,12 +45,12 @@ function displacementCurve(h: number): number {
   return h * h * h;
 }
 
-// Replicate VS Air branch smoothing: y = mix(y, median_y, smooth_t * 0.3)
-// This is applied BEFORE lift, matching the VS order.
+// Replicate VS Air island-layer smoothing: y = mix(y, median_y, smooth_t * 0.6)
+// Stronger than ground layer (0.3) for clean floating surfaces.
 function applyAirSmoothing(y: number, heightScale: number, pi: number): number {
   const smoothT = Math.min(1, pi / 0.4);
   const medianY = displacementCurve(0.35) * heightScale;
-  return y + (medianY - y) * smoothT * 0.3;
+  return y + (medianY - y) * smoothT * 0.6;
 }
 
 export function buildIslandMesh(
