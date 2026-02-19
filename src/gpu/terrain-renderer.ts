@@ -347,7 +347,7 @@ struct PlanarMaterial {
   specular_mod: f32,
 }
 
-fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, sea: f32) -> PlanarMaterial {
+fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, sea: f32, frag: f32) -> PlanarMaterial {
   var pm: PlanarMaterial;
   pm.normal_offset = vec3f(0.0);
   pm.replace_color = vec3f(0.5);
@@ -472,8 +472,7 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
 
       // Recompute chunk noise for crater marks (ground layer only)
-      let fs_frag = hex_state.r;
-      let fs_base_freq = 0.003 * pow(8.0, fs_frag);
+      let fs_base_freq = 0.003 * pow(8.0, frag);
       let fs_detail_freq = fs_base_freq * 3.75;
       let chunk = fbm3(wn * fs_base_freq) * 0.7 + value_noise(wn * fs_detail_freq) * 0.3;
       let threshold = mix(0.75, 0.15, lift_t);
@@ -627,7 +626,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   // Planar overlay decode — evaluated before material for deep integration
   let plane_type = u32(round(hex_state.g * 255.0));
   let p_intensity = hex_state.b;
-  let pm = get_planar_material(plane_type, p_intensity, in.world_pos, in.elevation, sea);
+  let p_frag = hex_state.r;
+  let pm = get_planar_material(plane_type, p_intensity, in.world_pos, in.elevation, sea, p_frag);
 
   // Curvature approximation — must be in uniform control flow (before any
   // non-uniform branching) since dpdx/dpdy require all quad invocations active.
