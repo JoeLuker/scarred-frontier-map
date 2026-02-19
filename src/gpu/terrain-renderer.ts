@@ -117,23 +117,22 @@ fn vs_main(in: VertexIn) -> VertexOut {
   if (vt_plane == 1u) {
     // FIRE: amplify terrain contrast — valleys deepen into lava channels,
     // ridges sharpen into volcanic peaks. Noise adds jagged texture.
-    let contrast = (norm_elev - 0.35) * 0.02; // positive above 0.35, negative below
-    let jag = (value_noise(in.pos_xz * 0.12) - 0.5) * 0.008;
+    let contrast = (norm_elev - FIRE_CONTRAST_CENTER) * FIRE_CONTRAST_SCALE;
+    let jag = (value_noise(in.pos_xz * FIRE_JAG_FREQ) - 0.5) * FIRE_JAG_AMP;
     y += (contrast + jag) * vt_pi * hs;
 
   } else if (vt_plane == 2u) {
     // WATER: flatten toward flood level — terrain pulled toward a plane
     // just above sea. Low areas rise slightly, high areas are pulled down.
-    let flood_norm = 0.08; // just above sea
-    let flood_y = displacement_curve(flood_norm) * hs;
-    y = mix(y, flood_y, vt_pi * 0.6);
+    let flood_y = displacement_curve(WATER_FLOOD_NORM) * hs;
+    y = mix(y, flood_y, vt_pi * WATER_FLATTEN_FACTOR);
 
   } else if (vt_plane == 3u) {
     // EARTH: tectonic uplift — strong blocky displacement.
     // Quantized noise gives plate-like stepped terraces.
-    let n = value_noise(in.pos_xz * 0.05);
-    let block = floor(n * 4.0) / 4.0;
-    y += block * vt_pi * 0.015 * hs;
+    let n = value_noise(in.pos_xz * EARTH_NOISE_FREQ);
+    let block = floor(n * EARTH_QUANTIZE_BANDS) / EARTH_QUANTIZE_BANDS;
+    y += block * vt_pi * EARTH_UPLIFT_AMP * hs;
 
   } else if (vt_plane == 4u) {
     // AIR: ground terrain only — island meshes use the early-exit path above.
@@ -141,37 +140,37 @@ fn vs_main(in: VertexIn) -> VertexOut {
     let frag = vt_packed_r.fragmentation;
     let lift_param = vt_packed_r.lift;
 
-    let base_freq = 0.003 * pow(8.0, frag);
-    let detail_freq = base_freq * 3.75;
-    let chunk = fbm3(in.pos_xz * base_freq) * 0.7 + value_noise(in.pos_xz * detail_freq) * 0.3;
-    let lift_t = saturate((vt_pi - 0.3) / 0.5);
-    let threshold = mix(0.75, 0.15, lift_t);
-    let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
+    let base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag);
+    let detail_freq = base_freq * AIR_DETAIL_FREQ_MUL;
+    let chunk = fbm3(in.pos_xz * base_freq) * AIR_CHUNK_BLEND_FBM + value_noise(in.pos_xz * detail_freq) * AIR_CHUNK_BLEND_DETAIL;
+    let lift_t = saturate((vt_pi - AIR_LIFT_T_MIN) / AIR_LIFT_T_RANGE);
+    let threshold = mix(AIR_THRESHOLD_HIGH, AIR_THRESHOLD_LOW, lift_t);
+    let is_floating = smoothstep(threshold - AIR_SMOOTHSTEP_WIDTH, threshold + AIR_SMOOTHSTEP_WIDTH, chunk);
 
     // Smoothing scales with intensity² — barely visible at overlay edges,
     // ramps up in the interior. Prevents sharp cliffs at overlay boundary.
-    let median_y = displacement_curve(0.35) * hs;
+    let median_y = displacement_curve(AIR_SMOOTH_MEDIAN) * hs;
     let smooth_t = vt_pi * vt_pi;
-    y = mix(y, median_y, smooth_t * 0.3);
+    y = mix(y, median_y, smooth_t * AIR_SMOOTH_FACTOR);
 
     // Terrain ripped away where islands were torn out.
-    let gouge_target = -0.008 * hs;
+    let gouge_target = -AIR_GOUGE_DEPTH * hs;
     let gouge_factor = is_floating * lift_param;
     y = mix(y, gouge_target, gouge_factor);
 
   } else if (vt_plane == 5u) {
     // POSITIVE: gentle growth uplift
-    y += value_noise(in.pos_xz * 0.04) * vt_pi * 0.005 * hs;
+    y += value_noise(in.pos_xz * POSITIVE_NOISE_FREQ) * vt_pi * POSITIVE_UPLIFT_AMP * hs;
 
   } else if (vt_plane == 6u) {
     // NEGATIVE: sinkhole — terrain depresses, especially peaks (entropy).
-    let sink = norm_elev * 0.02 + 0.005; // peaks sink more
+    let sink = norm_elev * NEGATIVE_PEAK_SINK + NEGATIVE_BASE_SINK;
     y -= sink * vt_pi * hs;
 
   } else if (vt_plane == 7u) {
     // SCAR: chaotic — some areas violently up, others down.
-    let n = (value_noise(in.pos_xz * 0.06) - 0.5) * 2.0;
-    y += n * vt_pi * 0.012 * hs;
+    let n = (value_noise(in.pos_xz * SCAR_NOISE_FREQ) - 0.5) * 2.0;
+    y += n * vt_pi * SCAR_DISPLACEMENT_AMP * hs;
   }
 
   // Edge taper: smoothly lower terrain toward sea level near grid boundary.
@@ -335,7 +334,7 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     // ── AIR: Floating islands (dual-layer) ──
     // Ground layer: wind-scoured surfaces + crater marks where islands lifted.
     // Island layer: ethereal sky-stone material with glow.
-    let lift_t = saturate((pi - 0.3) / 0.5);
+    let lift_t = saturate((pi - AIR_LIFT_T_MIN) / AIR_LIFT_T_RANGE);
     let is_island_layer = (obj.flags & 4u) != 0u;
 
     if (is_island_layer) {
@@ -362,11 +361,11 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       let lift_param = fs_packed_r.lift;
 
       // Recompute chunk noise for crater marks (ground layer only)
-      let fs_base_freq = 0.003 * pow(8.0, frag);
-      let fs_detail_freq = fs_base_freq * 3.75;
-      let chunk = fbm3(wn * fs_base_freq) * 0.7 + value_noise(wn * fs_detail_freq) * 0.3;
-      let threshold = mix(0.75, 0.15, lift_t);
-      let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
+      let fs_base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag);
+      let fs_detail_freq = fs_base_freq * AIR_DETAIL_FREQ_MUL;
+      let chunk = fbm3(wn * fs_base_freq) * AIR_CHUNK_BLEND_FBM + value_noise(wn * fs_detail_freq) * AIR_CHUNK_BLEND_DETAIL;
+      let threshold = mix(AIR_THRESHOLD_HIGH, AIR_THRESHOLD_LOW, lift_t);
+      let is_floating = smoothstep(threshold - AIR_SMOOTHSTEP_WIDTH, threshold + AIR_SMOOTHSTEP_WIDTH, chunk);
 
       // Crater areas: exposed brown soil/dirt where terrain was ripped out
       let gouge = is_floating * lift_param;

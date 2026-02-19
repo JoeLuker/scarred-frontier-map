@@ -13,6 +13,8 @@
  * terrain-noise.wgsl.ts referencing `params`).
  */
 
+import { PLANAR } from '../core/config';
+
 export function createRenderNoiseWGSL(): string {
   return /* wgsl */ `
 // ============================================================
@@ -21,6 +23,44 @@ export function createRenderNoiseWGSL(): string {
 // ============================================================
 
 const SQRT3: f32 = 1.7320508075688772;
+
+// ── Planar displacement constants (from config.ts PLANAR) ───
+
+const FIRE_CONTRAST_CENTER: f32 = ${PLANAR.FIRE.CONTRAST_CENTER};
+const FIRE_CONTRAST_SCALE: f32 = ${PLANAR.FIRE.CONTRAST_SCALE};
+const FIRE_JAG_FREQ: f32 = ${PLANAR.FIRE.JAG_FREQ};
+const FIRE_JAG_AMP: f32 = ${PLANAR.FIRE.JAG_AMP};
+
+const WATER_FLOOD_NORM: f32 = ${PLANAR.WATER.FLOOD_NORM};
+const WATER_FLATTEN_FACTOR: f32 = ${PLANAR.WATER.FLATTEN_FACTOR};
+
+const EARTH_NOISE_FREQ: f32 = ${PLANAR.EARTH.NOISE_FREQ};
+const EARTH_UPLIFT_AMP: f32 = ${PLANAR.EARTH.UPLIFT_AMP};
+const EARTH_QUANTIZE_BANDS: f32 = ${PLANAR.EARTH.QUANTIZE_BANDS}.0;
+
+const AIR_BASE_FREQ: f32 = ${PLANAR.AIR.BASE_FREQ};
+const AIR_FRAG_EXPONENT: f32 = ${PLANAR.AIR.FRAG_EXPONENT};
+const AIR_DETAIL_FREQ_MUL: f32 = ${PLANAR.AIR.DETAIL_FREQ_MUL};
+const AIR_CHUNK_BLEND_FBM: f32 = ${PLANAR.AIR.CHUNK_BLEND_FBM};
+const AIR_CHUNK_BLEND_DETAIL: f32 = ${PLANAR.AIR.CHUNK_BLEND_DETAIL};
+const AIR_LIFT_T_MIN: f32 = ${PLANAR.AIR.LIFT_T_MIN};
+const AIR_LIFT_T_RANGE: f32 = ${PLANAR.AIR.LIFT_T_RANGE};
+const AIR_THRESHOLD_HIGH: f32 = ${PLANAR.AIR.THRESHOLD_HIGH};
+const AIR_THRESHOLD_LOW: f32 = ${PLANAR.AIR.THRESHOLD_LOW};
+const AIR_SMOOTHSTEP_WIDTH: f32 = ${PLANAR.AIR.SMOOTHSTEP_WIDTH};
+const AIR_MAX_LIFT_FRACTION: f32 = ${PLANAR.AIR.MAX_LIFT_FRACTION};
+const AIR_SMOOTH_MEDIAN: f32 = ${PLANAR.AIR.SMOOTH_MEDIAN};
+const AIR_SMOOTH_FACTOR: f32 = ${PLANAR.AIR.SMOOTH_FACTOR};
+const AIR_GOUGE_DEPTH: f32 = ${PLANAR.AIR.GOUGE_DEPTH};
+
+const POSITIVE_NOISE_FREQ: f32 = ${PLANAR.POSITIVE.NOISE_FREQ};
+const POSITIVE_UPLIFT_AMP: f32 = ${PLANAR.POSITIVE.UPLIFT_AMP};
+
+const NEGATIVE_PEAK_SINK: f32 = ${PLANAR.NEGATIVE.PEAK_SINK};
+const NEGATIVE_BASE_SINK: f32 = ${PLANAR.NEGATIVE.BASE_SINK};
+
+const SCAR_NOISE_FREQ: f32 = ${PLANAR.SCAR.NOISE_FREQ};
+const SCAR_DISPLACEMENT_AMP: f32 = ${PLANAR.SCAR.DISPLACEMENT_AMP};
 
 // ── Hash / noise ────────────────────────────────────────────
 
