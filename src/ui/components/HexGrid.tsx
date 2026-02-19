@@ -329,7 +329,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
     // Serialize Air overlay state to detect changes
     const key = airOverlays.map(o =>
-      `${o.id}:${o.coordinates.q},${o.coordinates.r}:${o.intensity}:${o.radius}:${o.falloff}:${o.fragmentation}`
+      `${o.id}:${o.coordinates.q},${o.coordinates.r}:${o.intensity}:${o.radius}:${o.falloff}:${o.fragmentation}:${o.lift}`
     ).sort().join('|') + `|cfg:${worldConfig.seed}`;
 
     if (key === islandKeyRef.current) {

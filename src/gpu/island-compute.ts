@@ -127,8 +127,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     return;
   }
 
-  // Fragmentation controls chunk noise frequency — must match terrain-renderer.ts
-  let frag = hex_state.r;
+  // Decode packed R channel: high nibble = lift, low nibble = fragmentation
+  let r_byte = u32(round(hex_state.r * 255.0));
+  let frag = f32(r_byte & 0xFu) / 15.0;
+  let lift_param = f32(r_byte >> 4u) / 15.0;
+
   let base_freq = 0.003 * pow(8.0, frag);
   let detail_freq = base_freq * 3.75;
 
@@ -138,13 +141,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let threshold = mix(0.75, 0.15, lift_t);
   let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
 
-  // Per-chunk lift variation: low-freq noise gives each chunk its own altitude
-  let chunk_alt = value_noise(pos * 0.004);
-  let alt_mul = 0.8 + chunk_alt * 0.4; // 0.8x to 1.2x
+  // Per-chunk lift variation — wider range at higher lift for dramatic separation
+  let chunk_alt = value_noise(pos * 0.01);
+  let variation = 0.2 + lift_param * 0.6;
+  let alt_mul = (1.0 - variation) + chunk_alt * variation * 2.0;
 
   // Lift height — same formula as VS Air branch
-  let base_lift = mix(0.015, 0.04, lift_t) * config.height_scale;
-  let lift_height = base_lift * alt_mul;
+  let lift_height = mix(0.005, 0.08, lift_param) * lift_t * config.height_scale * alt_mul;
 
   results[idx] = vec4f(is_floating, lift_height, planar_intensity, 0.0);
 }

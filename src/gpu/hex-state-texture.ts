@@ -20,7 +20,8 @@ const PLANE_TYPE_ID: Record<string, number> = {
 
 /**
  * GPU texture encoding per-hex game state:
- *   R = planar fragmentation (0.0-1.0 → 0-255, controls island chunk noise freq for Air)
+ *   R = packed: lift (high nibble, bits 7-4) + fragmentation (low nibble, bits 3-0)
+ *       Shader decodes: r_byte = round(r * 255), frag = (r_byte & 0xF) / 15, lift = (r_byte >> 4) / 15
  *   G = plane type (0-7 stored as direct byte, decoded via round(g * 255))
  *   B = planar intensity (0.0-1.0 → 0-255)
  *   A = packed: terrain_id (bits 7-4) + sector boundary (bit 0)
@@ -84,8 +85,10 @@ export class HexStateTexture {
 
       const off = (ty * size + tx) * 4;
 
-      // R = fragmentation (0-255, shader reads as 0.0-1.0)
-      data[off] = Math.min(255, Math.round(hex.planarFragmentation * 255));
+      // R = packed: lift (high nibble) + fragmentation (low nibble)
+      const fragNibble = Math.min(15, Math.round(hex.planarFragmentation * 15));
+      const liftNibble = Math.min(15, Math.round(hex.planarLift * 15));
+      data[off] = (liftNibble << 4) | fragNibble;
 
       // G = plane type, B = intensity (encode for ALL planar influences)
       if (hex.planarInfluences.length > 0) {

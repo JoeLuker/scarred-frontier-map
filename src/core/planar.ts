@@ -180,6 +180,7 @@ export const computeHexState = (hex: HexData, overlays: readonly PlanarOverlay[]
     planarAlignment: PlanarAlignment.MATERIAL as PlanarAlignment,
     planarIntensity: 0,
     planarFragmentation: 0.5,
+    planarLift: 0.5,
     planarInfluences: [] as PlanarInfluence[],
     reactionEmission: null as PlanarAlignment | null,
   };
@@ -213,6 +214,7 @@ export const computeHexState = (hex: HexData, overlays: readonly PlanarOverlay[]
   let maxIntensity = 0;
   let dominantPlane = PlanarAlignment.MATERIAL;
   let dominantFragmentation = 0.5;
+  let dominantLift = 0.5;
 
   for (const overlay of overlays) {
     const dist = getHexDistance(hex.coordinates, overlay.coordinates);
@@ -237,6 +239,7 @@ export const computeHexState = (hex: HexData, overlays: readonly PlanarOverlay[]
           maxIntensity = intensity;
           dominantPlane = overlay.type;
           dominantFragmentation = overlay.fragmentation;
+          dominantLift = overlay.lift;
         }
       }
     }
@@ -266,6 +269,7 @@ export const computeHexState = (hex: HexData, overlays: readonly PlanarOverlay[]
     planarAlignment: dominantPlane,
     planarIntensity: maxIntensity,
     planarFragmentation: dominantFragmentation,
+    planarLift: dominantLift,
     planarInfluences: influences,
     reactionEmission: emission,
   };

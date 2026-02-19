@@ -138,8 +138,11 @@ fn vs_main(in: VertexIn) -> VertexOut {
     // AIR: dual-layer rendering via obj.flags.
     // Both layers: smooth ground base. Island layer lifts uniformly;
     // fragment shader discards non-floating fragments.
-    // Fragmentation controls chunk noise frequency: 0=huge landmass, 1=tiny patches
-    let frag = vt_state.r;
+    // Decode R channel: high nibble = lift param, low nibble = fragmentation
+    let r_byte = u32(round(vt_state.r * 255.0));
+    let frag = f32(r_byte & 0xFu) / 15.0;
+    let lift_param = f32(r_byte >> 4u) / 15.0;
+
     let base_freq = 0.003 * pow(8.0, frag);
     let detail_freq = base_freq * 3.75;
     let chunk = fbm3(in.pos_xz * base_freq) * 0.7 + value_noise(in.pos_xz * detail_freq) * 0.3;
@@ -157,15 +160,16 @@ fn vs_main(in: VertexIn) -> VertexOut {
     if (is_island_layer) {
       // Pass floating mask to fragment for discard (avoids expensive noise recompute)
       island_mask = is_floating;
-      // Per-chunk altitude variation — low-freq noise gives each chunk its own height
-      let chunk_alt = value_noise(in.pos_xz * 0.004);
-      let alt_mul = 0.8 + chunk_alt * 0.4;
-      // Lift: ~1.5 to 4 hex sizes of visible gap at max intensity
-      let lift = mix(0.015, 0.04, lift_t) * hs * alt_mul;
+      // Per-chunk altitude variation — wider range at higher lift for dramatic separation
+      let chunk_alt = value_noise(in.pos_xz * 0.01);
+      let variation = 0.2 + lift_param * 0.6;
+      let alt_mul = (1.0 - variation) + chunk_alt * variation * 2.0;
+      // Lift height scales with lift slider
+      let lift = mix(0.005, 0.08, lift_param) * lift_t * hs * alt_mul;
       y += lift;
     } else {
-      // Ground: depress where islands lifted from
-      y -= is_floating * lift_t * 0.003 * hs;
+      // Ground: visible depression where islands lifted from
+      y -= is_floating * lift_t * mix(0.003, 0.02, lift_param) * hs;
     }
 
   } else if (vt_plane == 5u) {
@@ -347,7 +351,7 @@ struct PlanarMaterial {
   specular_mod: f32,
 }
 
-fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, sea: f32, frag: f32) -> PlanarMaterial {
+fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, sea: f32, packed_r: f32) -> PlanarMaterial {
   var pm: PlanarMaterial;
   pm.normal_offset = vec3f(0.0);
   pm.replace_color = vec3f(0.5);
@@ -470,6 +474,10 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       // Ground layer: subtle wind-worn desaturation + crater marks
       let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
       pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
+
+      // Decode packed R: high nibble = lift, low nibble = fragmentation
+      let pm_r_byte = u32(round(packed_r * 255.0));
+      let frag = f32(pm_r_byte & 0xFu) / 15.0;
 
       // Recompute chunk noise for crater marks (ground layer only)
       let fs_base_freq = 0.003 * pow(8.0, frag);

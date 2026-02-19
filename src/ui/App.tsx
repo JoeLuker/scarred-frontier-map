@@ -70,6 +70,7 @@ const App: React.FC = () => {
       intensity: defaults.intensity,
       falloff: defaults.falloff,
       fragmentation: defaults.fragmentation,
+      lift: defaults.lift,
     });
   }, [focusedHex, addOverlay]);
 

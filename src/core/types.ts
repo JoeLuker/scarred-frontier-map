@@ -53,6 +53,7 @@ export interface PlanarOverlay {
   intensity: number;  // 0-1, scales max per-hex intensity
   falloff: number;    // exponent for distance curve (0.5=gradual, 6=sharp)
   fragmentation: number; // 0-1, controls island chunk noise frequency (Air only)
+  lift: number;          // 0-1, controls how high floating islands rise (Air only)
 }
 
 export interface PlanarInfluence {
@@ -82,6 +83,7 @@ export interface HexData {
   planarAlignment: PlanarAlignment;
   planarIntensity: number;
   planarFragmentation: number;  // 0-1, chunk noise frequency from dominant overlay
+  planarLift: number;           // 0-1, island lift height from dominant overlay
   planarInfluences: PlanarInfluence[];
   reactionEmission: PlanarAlignment | null;
 }

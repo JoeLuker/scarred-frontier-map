@@ -37,15 +37,16 @@ export const PLANAR_DEFAULTS: Record<PlanarAlignment, {
   readonly falloff: number;
   readonly radius: number;
   readonly fragmentation: number;
+  readonly lift: number;
 }> = {
-  [PlanarAlignment.MATERIAL]:  { intensity: 1.0, falloff: 3.0, radius: 5, fragmentation: 0.5 },
-  [PlanarAlignment.FIRE]:      { intensity: 0.9, falloff: 4.0, radius: 5, fragmentation: 0.5 },
-  [PlanarAlignment.WATER]:     { intensity: 0.7, falloff: 1.5, radius: 8, fragmentation: 0.5 },
-  [PlanarAlignment.AIR]:       { intensity: 0.6, falloff: 1.0, radius: 10, fragmentation: 0.5 },
-  [PlanarAlignment.EARTH]:     { intensity: 0.8, falloff: 3.0, radius: 6, fragmentation: 0.5 },
-  [PlanarAlignment.POSITIVE]:  { intensity: 0.7, falloff: 2.0, radius: 7, fragmentation: 0.5 },
-  [PlanarAlignment.NEGATIVE]:  { intensity: 0.8, falloff: 2.5, radius: 6, fragmentation: 0.5 },
-  [PlanarAlignment.SCAR]:      { intensity: 1.0, falloff: 5.0, radius: 4, fragmentation: 0.5 },
+  [PlanarAlignment.MATERIAL]:  { intensity: 1.0, falloff: 3.0, radius: 5, fragmentation: 0.5, lift: 0.5 },
+  [PlanarAlignment.FIRE]:      { intensity: 0.9, falloff: 4.0, radius: 5, fragmentation: 0.5, lift: 0.5 },
+  [PlanarAlignment.WATER]:     { intensity: 0.7, falloff: 1.5, radius: 8, fragmentation: 0.5, lift: 0.5 },
+  [PlanarAlignment.AIR]:       { intensity: 0.6, falloff: 1.0, radius: 10, fragmentation: 0.5, lift: 0.5 },
+  [PlanarAlignment.EARTH]:     { intensity: 0.8, falloff: 3.0, radius: 6, fragmentation: 0.5, lift: 0.5 },
+  [PlanarAlignment.POSITIVE]:  { intensity: 0.7, falloff: 2.0, radius: 7, fragmentation: 0.5, lift: 0.5 },
+  [PlanarAlignment.NEGATIVE]:  { intensity: 0.8, falloff: 2.5, radius: 6, fragmentation: 0.5, lift: 0.5 },
+  [PlanarAlignment.SCAR]:      { intensity: 1.0, falloff: 5.0, radius: 4, fragmentation: 0.5, lift: 0.5 },
 };
 
 // --- Continuous Terrain Field (world-space coordinates) ---

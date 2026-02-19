@@ -65,6 +65,7 @@ export class WorldEngine {
       intensity: positiveDefaults.intensity,
       falloff: positiveDefaults.falloff,
       fragmentation: positiveDefaults.fragmentation,
+      lift: positiveDefaults.lift,
     };
     const overlays = [defaultOverlay];
     const hexesWithOverlay = applyOverlaysToMap(hexes, overlays);
@@ -122,6 +123,7 @@ export class WorldEngine {
         planarAlignment: hex.planarAlignment,
         planarIntensity: 0,
         planarFragmentation: 0.5,
+        planarLift: 0.5,
         planarInfluences: [],
         reactionEmission: null,
       };

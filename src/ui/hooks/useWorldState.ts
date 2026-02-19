@@ -131,6 +131,7 @@ export const useWorldState = () => {
         planarAlignment: PlanarAlignment.MATERIAL,
         planarIntensity: 0,
         planarFragmentation: 0.5,
+        planarLift: 0.5,
         planarInfluences: [],
         reactionEmission: null,
       };
