@@ -190,7 +190,24 @@ export function buildIslandMesh(
   // Each vertex gets a normalized depth (0 at boundary, 1 at deepest interior)
   // that reflects the actual contiguous mass shape.
   const distField = computeDistanceField(isIsland, cols, rows);
-  const { componentOf, maxDist } = computeComponents(isIsland, distField, cols, rows);
+
+  // Erode: remove thin fringes (vertices < 2 cells from boundary)
+  const MIN_DIST = 2;
+  islandCount = 0;
+  for (let i = 0; i < totalVerts; i++) {
+    if (isIsland[i] && distField[i]! < MIN_DIST) {
+      isIsland[i] = 0;
+    }
+    if (isIsland[i]) islandCount++;
+  }
+
+  if (islandCount === 0) {
+    return null;
+  }
+
+  // Recompute distance field after erosion
+  const erodedDist = computeDistanceField(isIsland, cols, rows);
+  const { componentOf, maxDist } = computeComponents(isIsland, erodedDist, cols, rows);
 
   // Normalized depth per vertex: 0 at edge, 1 at center of component
   const depth = new Float32Array(totalVerts);
@@ -198,7 +215,7 @@ export function buildIslandMesh(
     const comp = componentOf[i]!;
     if (comp < 0) continue;
     const md = maxDist[comp]!;
-    depth[i] = md > 0 ? distField[i]! / md : 0;
+    depth[i] = md > 0 ? erodedDist[i]! / md : 0;
   }
 
   // Per-component thickness scale: depth cannot exceed the island's width.
