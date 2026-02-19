@@ -61,6 +61,7 @@ struct VertexOut {
   @location(1) elevation: f32,
   @location(2) moisture: f32,
   @location(3) smooth_normal: vec3f,
+  @location(4) island_mask: f32,
 }
 
 // Terrain displacement: cubic ease-in compresses low/mid elevations.
@@ -82,6 +83,10 @@ fn vs_main(in: VertexIn) -> VertexOut {
   if (in.elevation >= sea) {
     y = displacement_curve(norm_elev) * hs;
   }
+
+  // Island layer mask: 0 = discard in fragment, 1 = keep.
+  // Default 0 for island layer (discard unless Air branch overrides), 1 for everything else.
+  var island_mask: f32 = select(1.0, 0.0, (obj.flags & 4u) != 0u);
 
   // Planar vertex displacement — terrain-aware reshaping via hex_state_tex.
   // Each plane reshapes terrain with geological purpose, not random noise.
@@ -129,8 +134,10 @@ fn vs_main(in: VertexIn) -> VertexOut {
     y = mix(y, median_y, smooth_t * 0.3);
 
     if (is_island_layer) {
-      // Uniform lift — fragment discard defines island boundaries
-      let lift = mix(0.005, 0.015, lift_t) * hs;
+      // Pass floating mask to fragment for discard (avoids expensive noise recompute)
+      island_mask = is_floating;
+      // Lift: ~1.5 to 4 hex sizes of visible gap at max intensity
+      let lift = mix(0.015, 0.04, lift_t) * hs;
       y += lift;
     } else {
       // Ground: depress where islands lifted from
@@ -168,6 +175,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
   out.elevation = in.elevation;
   out.moisture = in.moisture;
   out.smooth_normal = in.normal;
+  out.island_mask = island_mask;
   return out;
 }
 
@@ -421,43 +429,39 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     let is_island_layer = (obj.flags & 4u) != 0u;
 
     if (is_island_layer) {
-      // Island layer: smooth crystalline normals, ethereal sky-stone
+      // Island layer: subtle cool tint, preserves terrain identity
       let cn = value_noise(wn * 0.02 + vec2f(5.0, 11.0)) - 0.5;
-      pm.normal_offset = vec3f(cn * 0.1, 0.15, cn * 0.08) * pi;
+      pm.normal_offset = vec3f(cn * 0.1, 0.1, cn * 0.08) * pi;
 
-      let sky_stone = vec3f(0.78, 0.86, 0.96);
-      let crystal = vec3f(0.65, 0.75, 0.92);
-      let surface = mix(sky_stone, crystal, is_high);
-      pm.replace_color = surface;
-      pm.replace_strength = pi * 0.8;
-      pm.emission = vec3f(0.3, 0.5, 0.85) * lift_t * 0.2;
-      pm.roughness_mod = -0.35 * pi;
-      pm.snow_line_shift = -0.3 * pi;
-      pm.ambient_mod = 1.0 + 0.5 * pi;
-      pm.shadow_mod = mix(1.0, 0.35, pi);
-      pm.specular_mod = 1.0 + 0.8 * pi;
+      let tint = vec3f(0.6, 0.68, 0.78);
+      pm.replace_color = tint;
+      pm.replace_strength = pi * 0.35;
+      pm.emission = vec3f(0.15, 0.25, 0.45) * lift_t * 0.08;
+      pm.roughness_mod = -0.2 * pi;
+      pm.snow_line_shift = -0.15 * pi;
+      pm.ambient_mod = 1.0 + 0.2 * pi;
+      pm.shadow_mod = mix(1.0, 0.7, pi);
+      pm.specular_mod = 1.0 + 0.4 * pi;
     } else {
-      // Ground layer: wind-scoured normals + crater dust where islands lifted
+      // Ground layer: subtle wind-worn desaturation + crater marks
       let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
       pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
 
-      // Recompute chunk noise (must match vertex shader exactly)
+      // Recompute chunk noise for crater marks (ground layer only)
       let chunk = fbm3(wn * 0.008) * 0.7 + value_noise(wn * 0.03) * 0.3;
       let threshold = mix(0.75, 0.15, lift_t);
-      let is_floating = smoothstep(threshold - 0.05, threshold + 0.05, chunk);
+      let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
 
-      let dust = vec3f(0.72, 0.68, 0.58);
-      let cloud_white = vec3f(0.88, 0.90, 0.95);
-      let base_surface = mix(dust, cloud_white, is_high);
-      let crater_dust = vec3f(0.55, 0.50, 0.42);
-      let surface = mix(base_surface, crater_dust, is_floating * lift_t * 0.6);
+      let worn = vec3f(0.58, 0.55, 0.50);
+      let crater = vec3f(0.48, 0.44, 0.38);
+      let surface = mix(worn, crater, is_floating * lift_t * 0.5);
       pm.replace_color = surface;
-      pm.replace_strength = pi * (0.6 + is_floating * lift_t * 0.15);
-      pm.roughness_mod = mix(-0.15, 0.2, is_floating * lift_t) * pi;
-      pm.snow_line_shift = -0.2 * pi;
-      pm.ambient_mod = 1.0 + (0.3 - is_floating * lift_t * 0.1) * pi;
-      pm.shadow_mod = mix(1.0, mix(0.6, 0.8, is_floating * lift_t), pi);
-      pm.specular_mod = 1.0 + 0.2 * pi;
+      pm.replace_strength = pi * 0.3;
+      pm.roughness_mod = mix(0.0, 0.15, is_floating * lift_t) * pi;
+      pm.snow_line_shift = -0.1 * pi;
+      pm.ambient_mod = 1.0 + 0.15 * pi;
+      pm.shadow_mod = mix(1.0, 0.8, pi);
+      pm.specular_mod = 1.0 + 0.15 * pi;
     }
 
   } else if (plane_type == 5u) {
@@ -609,15 +613,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let hex_dist = max(max(abs(hex.qr.x), abs(hex.qr.y)), abs(hex.qr.x + hex.qr.y));
   let is_beyond_grid = hex_dist > u.grid_radius;
 
-  // Island layer: discard non-floating fragments (after derivatives are safe).
-  // Smoothstep band (±0.1) must match vertex shader for consistent edges.
-  if (plane_type == 4u && (obj.flags & 4u) != 0u) {
-    let lift_t_d = saturate((p_intensity - 0.3) / 0.5);
-    let chunk_d = fbm3(in.world_pos.xz * 0.008) * 0.7 + value_noise(in.world_pos.xz * 0.03) * 0.3;
-    let threshold_d = mix(0.75, 0.15, lift_t_d);
-    let floating_d = smoothstep(threshold_d - 0.1, threshold_d + 0.1, chunk_d);
-    if (floating_d < 0.1) { discard; }
-  }
+  // Island layer: discard non-floating fragments via vertex-interpolated mask.
+  // island_mask = 0 for island-layer verts in non-Air hexes or non-floating areas.
+  if (in.island_mask < 0.1) { discard; }
 
   // Beyond the hex grid: force water rendering (deep ocean).
   // The sea quad mesh goes through this same shader — no separate sea pipeline.

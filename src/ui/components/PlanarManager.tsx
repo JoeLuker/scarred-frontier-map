@@ -95,7 +95,7 @@ export const PlanarManager: React.FC<PlanarManagerProps> = ({
 
               <div className="space-y-1">
                 <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
-                  <span>Intensity</span>
+                  <span>Strength</span>
                   <span>{Math.round(overlay.intensity * 100)}%</span>
                 </div>
                 <input
@@ -109,8 +109,11 @@ export const PlanarManager: React.FC<PlanarManagerProps> = ({
 
               <div className="space-y-1">
                 <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
-                  <span>Falloff</span>
-                  <span>{overlay.falloff.toFixed(1)}</span>
+                  <span>Edge</span>
+                  <span className="flex gap-1.5 items-center">
+                    <span className="text-slate-600 font-normal normal-case">{overlay.falloff <= 1.5 ? 'soft' : overlay.falloff <= 3.5 ? 'med' : 'sharp'}</span>
+                    {Math.round((overlay.falloff - 0.5) / 5.5 * 100)}%
+                  </span>
                 </div>
                 <input
                   type="range"
