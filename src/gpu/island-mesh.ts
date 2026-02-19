@@ -24,6 +24,18 @@ function simpleNoise(x: number, y: number): number {
   return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
 }
 
+/**
+ * Multi-octave stalactite profile noise.
+ * Returns 0-1 where peaks represent stalactite tips hanging down.
+ * Squared big octave creates sharp downward protrusions.
+ */
+function stalactiteNoise(x: number, z: number): number {
+  const n1 = simpleNoise(x * 0.015, z * 0.015);
+  const n2 = simpleNoise(x * 0.06 + 5.3, z * 0.06 + 7.1);
+  const n3 = simpleNoise(x * 0.18 + 13.7, z * 0.18 + 11.3);
+  return n1 * n1 * 0.6 + n2 * 0.3 + n3 * 0.1;
+}
+
 export interface IslandMeshResult {
   readonly top: MeshBuffers;
   readonly underside: MeshBuffers;
@@ -35,10 +47,9 @@ export interface IslandRenderParams {
   readonly heightScale: number;
 }
 
-// Thickness constants
-const BASE_THICKNESS = 0.045;  // Fraction of heightScale — visible depth from the side
-const NOISE_AMP = 0.015;       // Fraction of heightScale for rocky noise on underside
-const NOISE_FREQ = 0.06;       // World-space frequency for underside noise
+// Underside profile constants
+const BASE_THICKNESS = 0.012;    // Fraction of heightScale — max envelope depth at island center
+const STALACTITE_AMP = 0.008;    // Fraction of heightScale — stalactite protrusion depth
 
 // Must match terrain-mesh.ts displacementCurve (also in VS)
 function displacementCurve(h: number): number {
@@ -51,6 +62,102 @@ function applyAirSmoothing(y: number, heightScale: number, pi: number): number {
   const smoothT = Math.min(1, pi / 0.4);
   const medianY = displacementCurve(0.35) * heightScale;
   return y + (medianY - y) * smoothT * 0.6;
+}
+
+/**
+ * Two-pass distance transform on a grid.
+ * Returns approximate distance (in grid cells) from each island vertex
+ * to the nearest non-island boundary. Non-island vertices get 0.
+ */
+function computeDistanceField(
+  isIsland: Uint8Array,
+  cols: number,
+  rows: number,
+): Float32Array {
+  const total = cols * rows;
+  const dist = new Float32Array(total);
+  const INF = cols + rows;
+
+  // Initialize: island = INF, non-island = 0
+  for (let i = 0; i < total; i++) {
+    dist[i] = isIsland[i] ? INF : 0;
+  }
+
+  // Forward pass: top-left to bottom-right
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const idx = row * cols + col;
+      if (!isIsland[idx]) continue;
+      if (col > 0) dist[idx] = Math.min(dist[idx]!, dist[idx - 1]! + 1);
+      if (row > 0) dist[idx] = Math.min(dist[idx]!, dist[idx - cols]! + 1);
+    }
+  }
+
+  // Backward pass: bottom-right to top-left
+  for (let row = rows - 1; row >= 0; row--) {
+    for (let col = cols - 1; col >= 0; col--) {
+      const idx = row * cols + col;
+      if (!isIsland[idx]) continue;
+      if (col < cols - 1) dist[idx] = Math.min(dist[idx]!, dist[idx + 1]! + 1);
+      if (row < rows - 1) dist[idx] = Math.min(dist[idx]!, dist[idx + cols]! + 1);
+    }
+  }
+
+  return dist;
+}
+
+/**
+ * Flood-fill connected components. Returns component ID per vertex (-1 for non-island)
+ * and max distance per component (for normalizing depth).
+ */
+function computeComponents(
+  isIsland: Uint8Array,
+  distField: Float32Array,
+  cols: number,
+  rows: number,
+): { componentOf: Int32Array; maxDist: number[] } {
+  const total = cols * rows;
+  const componentOf = new Int32Array(total);
+  componentOf.fill(-1);
+  const maxDist: number[] = [];
+  let nextId = 0;
+
+  const queue: number[] = [];
+
+  for (let i = 0; i < total; i++) {
+    if (!isIsland[i] || componentOf[i] !== -1) continue;
+
+    const id = nextId++;
+    let compMax = 0;
+    queue.length = 0;
+    queue.push(i);
+    componentOf[i] = id;
+
+    while (queue.length > 0) {
+      const idx = queue.pop()!;
+      const d = distField[idx]!;
+      if (d > compMax) compMax = d;
+
+      const row = (idx / cols) | 0;
+      const col = idx % cols;
+      const neighbors = [
+        col > 0 ? idx - 1 : -1,
+        col < cols - 1 ? idx + 1 : -1,
+        row > 0 ? idx - cols : -1,
+        row < rows - 1 ? idx + cols : -1,
+      ];
+      for (const n of neighbors) {
+        if (n >= 0 && isIsland[n] && componentOf[n] === -1) {
+          componentOf[n] = id;
+          queue.push(n);
+        }
+      }
+    }
+
+    maxDist.push(compMax);
+  }
+
+  return { componentOf, maxDist };
 }
 
 export function buildIslandMesh(
@@ -79,8 +186,22 @@ export function buildIslandMesh(
     return null;
   }
 
-  // --- Step 2: Build vertex + index arrays ---
-  // Map grid index → top vertex index (only island verts)
+  // --- Step 2: Distance transform + connected components ---
+  // Each vertex gets a normalized depth (0 at boundary, 1 at deepest interior)
+  // that reflects the actual contiguous mass shape.
+  const distField = computeDistanceField(isIsland, cols, rows);
+  const { componentOf, maxDist } = computeComponents(isIsland, distField, cols, rows);
+
+  // Normalized depth per vertex: 0 at edge, 1 at center of component
+  const depth = new Float32Array(totalVerts);
+  for (let i = 0; i < totalVerts; i++) {
+    const comp = componentOf[i]!;
+    if (comp < 0) continue;
+    const md = maxDist[comp]!;
+    depth[i] = md > 0 ? distField[i]! / md : 0;
+  }
+
+  // --- Step 3: Build vertex + index arrays ---
   const gridToTop = new Int32Array(totalVerts);
   gridToTop.fill(-1);
   let topVertCount = 0;
@@ -94,13 +215,11 @@ export function buildIslandMesh(
     }
   }
 
-  // Pre-allocate (generous upper bounds)
   const topVertices = new Float32Array(topVertCount * MESH_VERTEX_STRIDE);
   const bottomVertices = new Float32Array(topVertCount * MESH_VERTEX_STRIDE);
   const invSpacing2 = 1 / (2 * spacing);
 
-  // --- Step 3: Fill top and bottom vertex data ---
-  // Also compute bottomY grid for bottom normal computation
+  // --- Step 4: Fill top and bottom vertex data ---
   const topYGrid = new Float32Array(totalVerts);
   const bottomYGrid = new Float32Array(totalVerts);
 
@@ -115,13 +234,19 @@ export function buildIslandMesh(
     const topY = smoothedY + liftHeight;
     topYGrid[i] = topY;
 
-    // Underside: thickness tapers from center to edge using is_floating^2
-    const isFloating = classifyData[i * 4]!;
-    const thickness = BASE_THICKNESS * isFloating * isFloating * heightScale;
+    // Underside: taper envelope from component-aware distance field.
+    // depth^1.5 gives steeper taper at edges, wider plateau in center.
+    const d = depth[i]!;
+    const envelope = d * Math.sqrt(d); // d^1.5
+    const baseThick = BASE_THICKNESS * envelope * heightScale;
+
+    // Stalactite protrusions — modulated by envelope so they only
+    // appear in the interior, not at thin edges.
     const x = positions[i * 2]!;
     const z = positions[i * 2 + 1]!;
-    const rockNoise = simpleNoise(x * NOISE_FREQ, z * NOISE_FREQ);
-    const bottomY = topY - thickness - rockNoise * NOISE_AMP * heightScale;
+    const stalactite = stalactiteNoise(x, z) * STALACTITE_AMP * envelope * heightScale;
+
+    const bottomY = topY - baseThick - stalactite;
     bottomYGrid[i] = bottomY;
   }
 
@@ -194,7 +319,7 @@ export function buildIslandMesh(
     }
   }
 
-  // --- Step 4: Index buffers ---
+  // --- Step 5: Index buffers ---
   const maxQuads = (cols - 1) * (rows - 1);
   const topIndices = new Uint32Array(maxQuads * 6);
   const underIndices = new Uint32Array(maxQuads * 6 + islandCount * 24); // extra for side walls
@@ -234,20 +359,17 @@ export function buildIslandMesh(
     }
   }
 
-  // --- Step 5: Side walls ---
+  // --- Step 6: Side walls ---
   // For each grid edge where both vertices are island but at least one adjacent
   // quad has a non-island vertex, emit a wall quad connecting top and bottom.
   // Wall vertices need their own normals (outward-facing), so we append them.
 
-  // We'll add wall vertices to the underside mesh's vertex buffer
   let wallVertCount = 0;
-  const maxWallVerts = islandCount * 16; // 4 verts per wall quad, up to 4 boundary edges per vertex
+  const maxWallVerts = islandCount * 16;
   const wallVertices = new Float32Array(maxWallVerts * MESH_VERTEX_STRIDE);
 
-  // Helper to add a wall quad between two boundary edge vertices
   function addWallQuad(
     aIdx: number, bIdx: number,
-    // Which side is "outside" — used for normal direction
     outsideX: number, outsideZ: number,
   ): void {
     const ax = positions[aIdx * 2]!;
@@ -266,7 +388,6 @@ export function buildIslandMesh(
     // Normal perpendicular to edge, pointing toward outside
     let nx = -edz;
     let nz = edx;
-    // Check direction
     const midX = (ax + bx) * 0.5;
     const midZ = (az + bz) * 0.5;
     if (nx * (outsideX - midX) + nz * (outsideZ - midZ) < 0) {
@@ -278,7 +399,6 @@ export function buildIslandMesh(
     nx /= nlen;
     nz /= nlen;
 
-    // 4 wall vertices: topA, topB, botB, botA
     const baseIdx = topVertCount + wallVertCount;
     const wOff0 = wallVertCount * MESH_VERTEX_STRIDE;
     const wOff1 = (wallVertCount + 1) * MESH_VERTEX_STRIDE;
@@ -327,8 +447,6 @@ export function buildIslandMesh(
       const g1 = g0 + 1;
       if (!isIsland[g0] || !isIsland[g1]) continue;
 
-      // Check if this edge is on a boundary:
-      // above row (row-1) or below row (row+1) has a non-island vertex
       const aboveHasGap = row === 0 ||
         !isIsland[(row - 1) * cols + col] ||
         !isIsland[(row - 1) * cols + col + 1];
@@ -337,13 +455,11 @@ export function buildIslandMesh(
         !isIsland[(row + 1) * cols + col + 1];
 
       if (aboveHasGap) {
-        // Outside is above (lower Z)
         const outsideZ = originZ + (row - 1) * spacing;
         const outsideX = positions[g0 * 2]!;
         addWallQuad(g1, g0, outsideX, outsideZ);
       }
       if (belowHasGap) {
-        // Outside is below (higher Z)
         const outsideZ = originZ + (row + 1) * spacing;
         const outsideX = positions[g0 * 2]!;
         addWallQuad(g0, g1, outsideX, outsideZ);
