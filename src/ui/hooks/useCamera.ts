@@ -134,10 +134,10 @@ export const useCamera = (
     // Forward/back = along camera look direction on ground plane
     let dx = 0;
     let dz = 0;
-    if (keys.has('w')) { dx += sinAz; dz += cosAz; }
-    if (keys.has('s')) { dx -= sinAz; dz -= cosAz; }
-    if (keys.has('a')) { dx += cosAz; dz -= sinAz; }
-    if (keys.has('d')) { dx -= cosAz; dz += sinAz; }
+    if (keys.has('w')) { dx -= sinAz; dz -= cosAz; }
+    if (keys.has('s')) { dx += sinAz; dz += cosAz; }
+    if (keys.has('a')) { dx -= cosAz; dz += sinAz; }
+    if (keys.has('d')) { dx += cosAz; dz -= sinAz; }
 
     cam.targetX += dx * speed;
     cam.targetZ += dz * speed;
