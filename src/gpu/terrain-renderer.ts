@@ -76,9 +76,9 @@ fn vs_main(in: VertexIn) -> VertexOut {
   let land_range = max(1.0 - sea, 0.001);
   let hs = u.height_scale;
 
-  // Island underside: elevation field stores normalized world Y directly.
-  // Skip displacement_curve and all planar displacement — geometry is pre-baked.
-  if ((obj.flags & 8u) != 0u) {
+  // Island meshes (top + underside): elevation field stores pre-baked world Y.
+  // Skip displacement_curve and all planar displacement — geometry is final.
+  if ((obj.flags & 12u) != 0u) {
     let y = in.elevation * hs;
     let local = vec4f(in.pos_xz.x, y, in.pos_xz.y, 1.0);
     let world = (obj.model * local).xyz;
@@ -101,9 +101,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
     y = displacement_curve(norm_elev) * hs;
   }
 
-  // Island layer mask: 0 = discard in fragment, 1 = keep.
-  // Default 0 for island layer (discard unless Air branch overrides), 1 for everything else.
-  var island_mask: f32 = select(1.0, 0.0, (obj.flags & 4u) != 0u);
+  // Island meshes use the early-exit path above; only terrain ground reaches here.
+  var island_mask: f32 = 1.0;
 
   // Planar vertex displacement — terrain-aware reshaping via hex_state_tex.
   // Each plane reshapes terrain with geological purpose, not random noise.
@@ -135,9 +134,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
     y += block * vt_pi * 0.015 * hs;
 
   } else if (vt_plane == 4u) {
-    // AIR: dual-layer rendering via obj.flags.
-    // Both layers: smooth ground base. Island layer lifts uniformly;
-    // fragment shader discards non-floating fragments.
+    // AIR: ground terrain only — island meshes use the early-exit path above.
     // Decode R channel: high nibble = lift param, low nibble = fragmentation
     let r_byte = u32(round(vt_state.r * 255.0));
     let frag = f32(r_byte & 0xFu) / 15.0;
@@ -150,30 +147,16 @@ fn vs_main(in: VertexIn) -> VertexOut {
     let threshold = mix(0.75, 0.15, lift_t);
     let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
 
-    let is_island_layer = (obj.flags & 4u) != 0u;
-
     // Smoothing scales with intensity² — barely visible at overlay edges,
     // ramps up in the interior. Prevents sharp cliffs at overlay boundary.
     let median_y = displacement_curve(0.35) * hs;
     let smooth_t = vt_pi * vt_pi;
+    y = mix(y, median_y, smooth_t * 0.3);
 
-    if (is_island_layer) {
-      // Stronger smoothing for islands — flattens terrain for clean floating surfaces
-      y = mix(y, median_y, smooth_t * 0.6);
-      island_mask = is_floating;
-      // Per-chunk altitude variation: noise frequency below chunk frequency
-      // so each chunk gets a roughly uniform altitude offset.
-      let chunk_alt = value_noise(in.pos_xz * base_freq * 0.3);
-      let alt_mul = 0.7 + chunk_alt * 0.6; // 0.7x to 1.3x per-chunk
-      let lift = mix(0.005, 0.12, lift_param) * lift_t * hs * alt_mul;
-      y += lift;
-    } else {
-      y = mix(y, median_y, smooth_t * 0.3);
-      // Terrain ripped away where islands were torn out.
-      let gouge_target = -0.008 * hs;
-      let gouge_factor = is_floating * lift_t * mix(0.4, 0.9, lift_param);
-      y = mix(y, gouge_target, gouge_factor);
-    }
+    // Terrain ripped away where islands were torn out.
+    let gouge_target = -0.008 * hs;
+    let gouge_factor = is_floating * lift_t * mix(0.4, 0.9, lift_param);
+    y = mix(y, gouge_target, gouge_factor);
 
   } else if (vt_plane == 5u) {
     // POSITIVE: gentle growth uplift
@@ -654,9 +637,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let hex_dist = max(max(abs(hex.qr.x), abs(hex.qr.y)), abs(hex.qr.x + hex.qr.y));
   let is_beyond_grid = hex_dist > u.grid_radius;
 
-  // Island layer: discard non-floating fragments via vertex-interpolated mask.
-  // island_mask = 0 for island-layer verts in non-Air hexes or non-floating areas.
-  if (in.island_mask < 0.1) { discard; }
+  // (island_mask discard removed — island meshes now have pre-baked geometry,
+  //  no fragment-level classification needed.)
 
   // ═══════════════════════════════════════════════════════════════
   // Island underside: rocky material with simplified lighting.

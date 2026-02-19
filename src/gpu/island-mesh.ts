@@ -297,7 +297,7 @@ export function buildIslandMesh(
       const topOff = vi * MESH_VERTEX_STRIDE;
       topVertices[topOff] = x;
       topVertices[topOff + 1] = z;
-      topVertices[topOff + 2] = elev;     // raw elevation — VS applies displacement + lift
+      topVertices[topOff + 2] = topY / heightScale;  // pre-baked world Y — VS does y = elevation * hs
       topVertices[topOff + 3] = moist;
       topVertices[topOff + 4] = tnx;
       topVertices[topOff + 5] = tny;
