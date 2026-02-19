@@ -1,7 +1,7 @@
 export { initWebGPU, getGpuContext } from './context';
 export { createTerrainShader, invertMat4 } from './terrain-renderer';
 export { Scene } from './scene';
-export { createTerrainMaterial, createSeaMaterial, createSkyMaterial } from './materials';
+export { createTerrainMaterial, createIslandMaterial, createSeaMaterial, createSkyMaterial } from './materials';
 export { TerrainMesh, buildTerrainMesh, computeDisplacedY } from './terrain-mesh';
 export { HexStateTexture } from './hex-state-texture';
 export { TerrainCompute, GpuTerrainProvider, terrainFromId, elementFromId, flavorFromId } from './terrain-compute';

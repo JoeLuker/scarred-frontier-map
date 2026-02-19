@@ -10,6 +10,7 @@ import {
   Scene,
   createTerrainShader,
   createTerrainMaterial,
+  createIslandMaterial,
   createSeaMaterial,
   createSkyMaterial,
   TerrainMesh,
@@ -160,6 +161,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
         // Create shader + materials
         const shader = device.createShaderModule({ code: createTerrainShader() });
         const terrainMat = createTerrainMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
+        const islandMat = createIslandMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
         const seaMat = createSeaMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
         const skyMat = createSkyMaterial(device, shader, scene.format, scene.group0Layout);
 
@@ -212,7 +214,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
         // Register island scene objects (initially hidden)
         scene.addObject('island-top', {
-          material: terrainMat,
+          material: islandMat,
           mesh: islandTopMesh,
           flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_LAYER,
           stencilRef: 1,
@@ -220,7 +222,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
           visible: false,
         });
         scene.addObject('island-under', {
-          material: terrainMat,
+          material: islandMat,
           mesh: islandUnderMesh,
           flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_UNDERSIDE,
           stencilRef: 1,

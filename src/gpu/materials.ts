@@ -49,6 +49,43 @@ export function createTerrainMaterial(
   return { id: 'terrain', pipeline, usesObjectGroup: true };
 }
 
+/** Island pipeline: same as terrain but with back-face culling.
+ *  Island meshes are thin shells — without culling, backfaces of the top
+ *  surface are visible from below and vice versa, creating 2D artifacts. */
+export function createIslandMaterial(
+  device: GPUDevice,
+  shader: GPUShaderModule,
+  format: GPUTextureFormat,
+  g0: GPUBindGroupLayout,
+  g1: GPUBindGroupLayout,
+): Material {
+  const layout = device.createPipelineLayout({ bindGroupLayouts: [g0, g1] });
+  const pipeline = device.createRenderPipeline({
+    layout,
+    vertex: {
+      module: shader,
+      entryPoint: 'vs_main',
+      buffers: [TERRAIN_VERTEX_LAYOUT],
+    },
+    fragment: {
+      module: shader,
+      entryPoint: 'fs_main',
+      targets: [{ format }],
+    },
+    primitive: { topology: 'triangle-list', cullMode: 'back' },
+    depthStencil: {
+      depthWriteEnabled: true,
+      depthCompare: 'less',
+      format: DEPTH_FORMAT,
+      stencilFront: { compare: 'always', passOp: 'replace', failOp: 'keep', depthFailOp: 'keep' },
+      stencilBack: { compare: 'always', passOp: 'replace', failOp: 'keep', depthFailOp: 'keep' },
+      stencilReadMask: 0xFF,
+      stencilWriteMask: 0xFF,
+    },
+  });
+  return { id: 'island', pipeline, usesObjectGroup: true };
+}
+
 /** Sea pipeline: stencil test == 0 (only draws where terrain didn't render). */
 export function createSeaMaterial(
   device: GPUDevice,
