@@ -1,5 +1,7 @@
 // --- WGSL Shader (terrain) ---
 
+import { createRenderNoiseWGSL } from './render-noise.wgsl';
+
 export function createTerrainShader(): string {
   return /* wgsl */ `
 
@@ -135,10 +137,9 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
   } else if (vt_plane == 4u) {
     // AIR: ground terrain only — island meshes use the early-exit path above.
-    // Decode R channel: high nibble = lift param, low nibble = fragmentation
-    let r_byte = u32(round(vt_state.r * 255.0));
-    let frag = f32(r_byte & 0xFu) / 15.0;
-    let lift_param = f32(r_byte >> 4u) / 15.0;
+    let vt_packed_r = decode_packed_r(vt_state.r);
+    let frag = vt_packed_r.fragmentation;
+    let lift_param = vt_packed_r.lift;
 
     let base_freq = 0.003 * pow(8.0, frag);
     let detail_freq = base_freq * 3.75;
@@ -198,113 +199,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
 // ============================================================
 
 const PI: f32 = 3.14159265359;
-const SQRT3: f32 = 1.7320508075688772;
 
-// ============================================================
-// Unified pixel → hex conversion (single source of truth)
-// Returns rounded axial coords AND edge distance for SDF grid.
-// Mirrors src/core/geometry.ts pixelToHex (pointy-top layout).
-// ============================================================
-
-struct HexInfo {
-  qr: vec2f,       // rounded axial (q, r)
-  edge_dist: f32,  // 0 = center, 0.5 = edge (pointy-top hex SDF in pixel space)
-}
-
-fn pixel_to_hex(wx: f32, wz: f32, hex_size: f32) -> HexInfo {
-  // Pixel → fractional axial (pointy-top)
-  let inv_sqrt3 = 1.0 / SQRT3;
-  let fq = (inv_sqrt3 * wx / hex_size) - (wz / (3.0 * hex_size));
-  let fr = (2.0 / 3.0) * wz / hex_size;
-
-  // Cube coords (fractional)
-  let fx = fq;
-  let fz = fr;
-  let fy = -fx - fz;
-
-  // Round to nearest hex center (cube-coordinate rounding)
-  var rx = round(fx);
-  var ry = round(fy);
-  var rz = round(fz);
-  let dx = abs(rx - fx);
-  let dy = abs(ry - fy);
-  let dz = abs(rz - fz);
-  if (dx > dy && dx > dz) {
-    rx = -ry - rz;
-  } else if (dy > dz) {
-    ry = -rx - rz;
-  } else {
-    rz = -rx - ry;
-  }
-
-  // Edge distance: pointy-top hex SDF in pixel space (0 = center, 0.5 = edge).
-  // The cube-space Chebyshev metric max(|dx|,|dy|,|dz|) traces a FLAT-TOP hex,
-  // but our tiles are pointy-top. Compute the actual distance to the pointy-top
-  // hex edge using the pixel-space offset from the hex center.
-  let center_x = hex_size * SQRT3 * (rx + rz * 0.5);
-  let center_z = hex_size * 1.5 * rz;
-  let lx = abs(wx - center_x);
-  let lz = abs(wz - center_z);
-  // Pointy-top SDF: max of right-edge projection and diagonal-edge projection.
-  // Apothem (center-to-edge) = hex_size * √3/2, so normalizing by hex_size * √3
-  // gives the 0–0.5 range matching the old convention.
-  let edge = max(lx, 0.5 * lx + (SQRT3 / 2.0) * lz) / (SQRT3 * hex_size);
-
-  return HexInfo(vec2f(rx, rz), edge);
-}
-
-// Look up hex state texture by axial coords
-fn lookup_hex_state(hex_qr: vec2f, grid_radius: f32) -> vec4f {
-  let rq = hex_qr.x;
-  let rr = hex_qr.y;
-  let tex_size = grid_radius * 2.0 + 1.0;
-  let tx = (rq + grid_radius) / tex_size;
-  let tz = (rr + grid_radius) / tex_size;
-
-  if (tx < 0.0 || tx > 1.0 || tz < 0.0 || tz > 1.0) {
-    return vec4f(0.0, 0.0, 0.0, 0.0);
-  }
-
-  let tex_coord = vec2i(i32(rq + grid_radius), i32(rr + grid_radius));
-  return textureLoad(hex_state_tex, tex_coord, 0);
-}
-
-// ============================================================
-// Hash / noise utilities (render shader — vertex + fragment)
-// INTENTIONALLY DIFFERENT from terrain-compute.ts noise (which mirrors core/noise.ts).
-// These use a fast vec2→float hash for real-time visual detail (rock texture, snow,
-// per-hex variation, planar displacement). The compute shader uses integer lattice
-// hashing for deterministic terrain generation. The two systems don't need to match.
-// ============================================================
-
-fn hash2(p: vec2f) -> f32 {
-  var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-
-fn value_noise(p: vec2f) -> f32 {
-  let i = floor(p);
-  let f = fract(p);
-  let u = f * f * (3.0 - 2.0 * f); // smoothstep hermite
-  let a = hash2(i);
-  let b = hash2(i + vec2f(1.0, 0.0));
-  let c = hash2(i + vec2f(0.0, 1.0));
-  let d = hash2(i + vec2f(1.0, 1.0));
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-fn fbm3(p: vec2f) -> f32 {
-  var val = 0.0;
-  var amp = 0.5;
-  var pos = p;
-  for (var i = 0; i < 3; i++) {
-    val += amp * value_noise(pos);
-    pos *= 2.03;
-    amp *= 0.5;
-  }
-  return val;
-}
+` + createRenderNoiseWGSL() + `
 
 // ============================================================
 // Lighting constants
@@ -461,10 +357,9 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
       pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
 
-      // Decode packed R: high nibble = lift, low nibble = fragmentation
-      let pm_r_byte = u32(round(packed_r * 255.0));
-      let frag = f32(pm_r_byte & 0xFu) / 15.0;
-      let lift_param = f32(pm_r_byte >> 4u) / 15.0;
+      let fs_packed_r = decode_packed_r(packed_r);
+      let frag = fs_packed_r.fragmentation;
+      let lift_param = fs_packed_r.lift;
 
       // Recompute chunk noise for crater marks (ground layer only)
       let fs_base_freq = 0.003 * pow(8.0, frag);
@@ -616,9 +511,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
 
   let hex = pixel_to_hex(in.world_pos.x, in.world_pos.z, u.hex_size);
   let hex_state = lookup_hex_state(hex.qr, u.grid_radius);
-  let a_byte = u32(round(hex_state.a * 255.0));
-  let hex_terrain_id = a_byte >> 4u;
-  let ring_boundary = (a_byte & 1u) > 0u;
+  let packed_a = decode_packed_a(hex_state.a);
+  let hex_terrain_id = packed_a.terrain_id;
+  let ring_boundary = packed_a.sector_boundary;
   var is_water = hex_terrain_id == 0u;
 
   // Planar overlay decode — evaluated before material for deep integration

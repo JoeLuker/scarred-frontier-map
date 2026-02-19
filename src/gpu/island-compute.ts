@@ -1,9 +1,11 @@
 /**
  * GPU compute pipeline for classifying terrain vertices as floating island chunks.
- * Uses the SAME hash2/value_noise/fbm3 functions as the render shader (terrain-renderer.ts)
+ * Uses shared render-time noise functions from render-noise.wgsl.ts
  * — NOT the terrain-noise.wgsl.ts functions used for biome generation.
  * Also reads hex_state_tex to get per-vertex planar type and intensity.
  */
+
+import { createRenderNoiseWGSL } from './render-noise.wgsl';
 
 function createIslandClassifyShader(): string {
   return /* wgsl */ `
@@ -24,85 +26,7 @@ struct IslandConfig {
 @group(0) @binding(2) var<storage, read_write> results: array<vec4f>;
 @group(0) @binding(3) var hex_state_tex: texture_2d<f32>;
 
-// ============================================================
-// Hash / noise — MUST match terrain-renderer.ts exactly
-// ============================================================
-
-const SQRT3: f32 = 1.7320508075688772;
-
-fn hash2(p: vec2f) -> f32 {
-  var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-
-fn value_noise(p: vec2f) -> f32 {
-  let i = floor(p);
-  let f = fract(p);
-  let u = f * f * (3.0 - 2.0 * f);
-  let a = hash2(i);
-  let b = hash2(i + vec2f(1.0, 0.0));
-  let c = hash2(i + vec2f(0.0, 1.0));
-  let d = hash2(i + vec2f(1.0, 1.0));
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-fn fbm3(p: vec2f) -> f32 {
-  var val = 0.0;
-  var amp = 0.5;
-  var pos = p;
-  for (var i = 0; i < 3; i++) {
-    val += amp * value_noise(pos);
-    pos *= 2.03;
-    amp *= 0.5;
-  }
-  return val;
-}
-
-// ============================================================
-// Hex conversion — MUST match terrain-renderer.ts exactly
-// ============================================================
-
-fn pixel_to_hex_qr(wx: f32, wz: f32, hex_size: f32) -> vec2f {
-  let inv_sqrt3 = 1.0 / SQRT3;
-  let fq = (inv_sqrt3 * wx / hex_size) - (wz / (3.0 * hex_size));
-  let fr = (2.0 / 3.0) * wz / hex_size;
-
-  let fx = fq;
-  let fz = fr;
-  let fy = -fx - fz;
-
-  var rx = round(fx);
-  var ry = round(fy);
-  var rz = round(fz);
-  let dx = abs(rx - fx);
-  let dy = abs(ry - fy);
-  let dz = abs(rz - fz);
-  if (dx > dy && dx > dz) {
-    rx = -ry - rz;
-  } else if (dy > dz) {
-    ry = -rx - rz;
-  } else {
-    rz = -rx - ry;
-  }
-
-  return vec2f(rx, rz);
-}
-
-fn lookup_hex_state(hex_qr: vec2f, grid_radius: f32) -> vec4f {
-  let rq = hex_qr.x;
-  let rr = hex_qr.y;
-  let tex_size = grid_radius * 2.0 + 1.0;
-  let tx = (rq + grid_radius) / tex_size;
-  let tz = (rr + grid_radius) / tex_size;
-
-  if (tx < 0.0 || tx > 1.0 || tz < 0.0 || tz > 1.0) {
-    return vec4f(0.0, 0.0, 0.0, 0.0);
-  }
-
-  let tex_coord = vec2i(i32(rq + grid_radius), i32(rr + grid_radius));
-  return textureLoad(hex_state_tex, tex_coord, 0);
-}
+` + createRenderNoiseWGSL() + `
 
 // ============================================================
 // Compute kernel: per-vertex island classification
@@ -127,10 +51,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     return;
   }
 
-  // Decode packed R channel: high nibble = lift, low nibble = fragmentation
-  let r_byte = u32(round(hex_state.r * 255.0));
-  let frag = f32(r_byte & 0xFu) / 15.0;
-  let lift_param = f32(r_byte >> 4u) / 15.0;
+  let packed_r = decode_packed_r(hex_state.r);
+  let frag = packed_r.fragmentation;
+  let lift_param = packed_r.lift;
 
   let base_freq = 0.003 * pow(8.0, frag);
   let detail_freq = base_freq * 3.75;
