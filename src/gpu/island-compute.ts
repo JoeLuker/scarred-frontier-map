@@ -146,8 +146,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let chunk_alt = value_noise(pos * base_freq * 0.3);
   let alt_mul = 0.7 + chunk_alt * 0.6; // 0.7x to 1.3x per-chunk
 
-  // Lift height — same formula as VS Air branch
-  let lift_height = mix(0.005, 0.12, lift_param) * lift_t * config.height_scale * alt_mul;
+  // Lift height: slider value directly controls height.
+  // 0.15 = max lift as fraction of heightScale.
+  let lift_height = lift_param * 0.15 * config.height_scale * alt_mul;
 
   results[idx] = vec4f(is_floating, lift_height, planar_intensity, 0.0);
 }

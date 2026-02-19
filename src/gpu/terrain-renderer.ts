@@ -155,7 +155,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
     // Terrain ripped away where islands were torn out.
     let gouge_target = -0.008 * hs;
-    let gouge_factor = is_floating * lift_t * mix(0.4, 0.9, lift_param);
+    let gouge_factor = is_floating * lift_param;
     y = mix(y, gouge_target, gouge_factor);
 
   } else if (vt_plane == 5u) {
@@ -450,7 +450,7 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       let tint = vec3f(0.6, 0.68, 0.78);
       pm.replace_color = tint;
       pm.replace_strength = pi * 0.35;
-      pm.emission = vec3f(0.15, 0.25, 0.45) * lift_t * 0.08;
+      pm.emission = vec3f(0.15, 0.25, 0.45) * pi * 0.08;
       pm.roughness_mod = -0.2 * pi;
       pm.snow_line_shift = -0.15 * pi;
       pm.ambient_mod = 1.0 + 0.2 * pi;
@@ -464,6 +464,7 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       // Decode packed R: high nibble = lift, low nibble = fragmentation
       let pm_r_byte = u32(round(packed_r * 255.0));
       let frag = f32(pm_r_byte & 0xFu) / 15.0;
+      let lift_param = f32(pm_r_byte >> 4u) / 15.0;
 
       // Recompute chunk noise for crater marks (ground layer only)
       let fs_base_freq = 0.003 * pow(8.0, frag);
@@ -473,7 +474,7 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
 
       // Crater areas: exposed brown soil/dirt where terrain was ripped out
-      let gouge = is_floating * lift_t;
+      let gouge = is_floating * lift_param;
       let windswept = vec3f(0.50, 0.46, 0.40);
       let soil = vec3f(0.38, 0.28, 0.16);
       let surface = mix(windswept, soil, gouge);
