@@ -1,0 +1,389 @@
+import { MESH_VERTEX_STRIDE } from './types';
+import { computeDisplacedY } from './terrain-mesh';
+import type { MeshBuffers, TerrainGridData } from './terrain-mesh';
+
+// --- CPU-side value noise for underside rocky texture ---
+// Does NOT need to match any GPU noise — purely cosmetic.
+
+function hashF(x: number, y: number): number {
+  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+function simpleNoise(x: number, y: number): number {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = hashF(ix, iy);
+  const b = hashF(ix + 1, iy);
+  const c = hashF(ix, iy + 1);
+  const d = hashF(ix + 1, iy + 1);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+
+export interface IslandMeshResult {
+  readonly top: MeshBuffers;
+  readonly underside: MeshBuffers;
+}
+
+export interface IslandRenderParams {
+  readonly seaLevel: number;
+  readonly landRange: number;
+  readonly heightScale: number;
+}
+
+// Thickness constants
+const BASE_THICKNESS = 0.012;  // Fraction of heightScale
+const NOISE_AMP = 0.004;       // Fraction of heightScale for rocky noise
+const NOISE_FREQ = 0.06;       // World-space frequency for underside noise
+
+export function buildIslandMesh(
+  classifyData: Float32Array,
+  grid: TerrainGridData,
+  params: IslandRenderParams,
+): IslandMeshResult | null {
+  const { positions, elevations, moistures, cols, rows, originX, originZ, spacing, cullRadius2 } = grid;
+  const { seaLevel, landRange, heightScale } = params;
+  const totalVerts = cols * rows;
+
+  // --- Step 1: Classify vertices ---
+  const isIsland = new Uint8Array(totalVerts);
+  let islandCount = 0;
+  for (let i = 0; i < totalVerts; i++) {
+    const x = positions[i * 2]!;
+    const z = positions[i * 2 + 1]!;
+    if (x * x + z * z > cullRadius2) continue;
+    if (classifyData[i * 4]! > 0.5) {
+      isIsland[i] = 1;
+      islandCount++;
+    }
+  }
+
+  if (islandCount === 0) {
+    return null;
+  }
+
+  // --- Step 2: Build vertex + index arrays ---
+  // Map grid index → top vertex index (only island verts)
+  const gridToTop = new Int32Array(totalVerts);
+  gridToTop.fill(-1);
+  let topVertCount = 0;
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const idx = row * cols + col;
+      if (isIsland[idx]) {
+        gridToTop[idx] = topVertCount++;
+      }
+    }
+  }
+
+  // Pre-allocate (generous upper bounds)
+  const topVertices = new Float32Array(topVertCount * MESH_VERTEX_STRIDE);
+  const bottomVertices = new Float32Array(topVertCount * MESH_VERTEX_STRIDE);
+  const invSpacing2 = 1 / (2 * spacing);
+
+  // --- Step 3: Fill top and bottom vertex data ---
+  // Also compute bottomY grid for bottom normal computation
+  const topYGrid = new Float32Array(totalVerts);
+  const bottomYGrid = new Float32Array(totalVerts);
+
+  for (let i = 0; i < totalVerts; i++) {
+    if (!isIsland[i]) continue;
+
+    const elev = elevations[i]!;
+    const baseY = computeDisplacedY(elev, seaLevel, landRange, heightScale);
+    const liftHeight = classifyData[i * 4 + 1]!;
+    const topY = baseY + liftHeight;
+    topYGrid[i] = topY;
+
+    // Underside: thickness tapers from center to edge using is_floating^2
+    const isFloating = classifyData[i * 4]!;
+    const thickness = BASE_THICKNESS * isFloating * isFloating * heightScale;
+    const x = positions[i * 2]!;
+    const z = positions[i * 2 + 1]!;
+    const rockNoise = simpleNoise(x * NOISE_FREQ, z * NOISE_FREQ);
+    const bottomY = topY - thickness - rockNoise * NOISE_AMP * heightScale;
+    bottomYGrid[i] = bottomY;
+  }
+
+  // Write vertex data with normals
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const idx = row * cols + col;
+      const vi = gridToTop[idx]!;
+      if (vi < 0) continue;
+
+      const x = positions[idx * 2]!;
+      const z = positions[idx * 2 + 1]!;
+      const elev = elevations[idx]!;
+      const moist = moistures[idx]!;
+
+      // Top normals: central differences using island-neighbor elevations
+      const leftIdx = col > 0 ? idx - 1 : idx;
+      const rightIdx = col < cols - 1 ? idx + 1 : idx;
+      const upIdx = row > 0 ? idx - cols : idx;
+      const downIdx = row < rows - 1 ? idx + cols : idx;
+
+      const topY = topYGrid[idx]!;
+      const topLeft = isIsland[leftIdx] ? topYGrid[leftIdx]! : topY;
+      const topRight = isIsland[rightIdx] ? topYGrid[rightIdx]! : topY;
+      const topUp = isIsland[upIdx] ? topYGrid[upIdx]! : topY;
+      const topDown = isIsland[downIdx] ? topYGrid[downIdx]! : topY;
+
+      const tdydx = (topRight - topLeft) * invSpacing2;
+      const tdydz = (topDown - topUp) * invSpacing2;
+      let tnx = -tdydx;
+      let tny = 1;
+      let tnz = -tdydz;
+      const tlen = Math.sqrt(tnx * tnx + tny * tny + tnz * tnz);
+      tnx /= tlen; tny /= tlen; tnz /= tlen;
+
+      const topOff = vi * MESH_VERTEX_STRIDE;
+      topVertices[topOff] = x;
+      topVertices[topOff + 1] = z;
+      topVertices[topOff + 2] = elev;     // raw elevation — VS applies displacement + lift
+      topVertices[topOff + 3] = moist;
+      topVertices[topOff + 4] = tnx;
+      topVertices[topOff + 5] = tny;
+      topVertices[topOff + 6] = tnz;
+
+      // Bottom normals: central differences on bottomY grid (normals face downward)
+      const bottomY = bottomYGrid[idx]!;
+      const bLeft = isIsland[leftIdx] ? bottomYGrid[leftIdx]! : bottomY;
+      const bRight = isIsland[rightIdx] ? bottomYGrid[rightIdx]! : bottomY;
+      const bUp = isIsland[upIdx] ? bottomYGrid[upIdx]! : bottomY;
+      const bDown = isIsland[downIdx] ? bottomYGrid[downIdx]! : bottomY;
+
+      const bdydx = (bRight - bLeft) * invSpacing2;
+      const bdydz = (bDown - bUp) * invSpacing2;
+      // Flip normal to face downward
+      let bnx = bdydx;
+      let bny = -1;
+      let bnz = bdydz;
+      const blen = Math.sqrt(bnx * bnx + bny * bny + bnz * bnz);
+      bnx /= blen; bny /= blen; bnz /= blen;
+
+      // Underside: elevation field stores normalized world Y for VS direct usage
+      const bottomOff = vi * MESH_VERTEX_STRIDE;
+      bottomVertices[bottomOff] = x;
+      bottomVertices[bottomOff + 1] = z;
+      bottomVertices[bottomOff + 2] = bottomY / heightScale;  // VS will do: y = elevation * hs
+      bottomVertices[bottomOff + 3] = 0;  // moisture=0 signals "underside"
+      bottomVertices[bottomOff + 4] = bnx;
+      bottomVertices[bottomOff + 5] = bny;
+      bottomVertices[bottomOff + 6] = bnz;
+    }
+  }
+
+  // --- Step 4: Index buffers ---
+  const maxQuads = (cols - 1) * (rows - 1);
+  const topIndices = new Uint32Array(maxQuads * 6);
+  const underIndices = new Uint32Array(maxQuads * 6 + islandCount * 24); // extra for side walls
+  let topIdxCount = 0;
+  let underIdxCount = 0;
+
+  for (let row = 0; row < rows - 1; row++) {
+    for (let col = 0; col < cols - 1; col++) {
+      const g00 = row * cols + col;
+      const g10 = g00 + 1;
+      const g01 = (row + 1) * cols + col;
+      const g11 = g01 + 1;
+
+      // Only emit quads where ALL 4 vertices are island
+      if (!isIsland[g00] || !isIsland[g10] || !isIsland[g01] || !isIsland[g11]) continue;
+
+      const v00 = gridToTop[g00]!;
+      const v10 = gridToTop[g10]!;
+      const v01 = gridToTop[g01]!;
+      const v11 = gridToTop[g11]!;
+
+      // Top surface: CCW winding (same as terrain)
+      topIndices[topIdxCount++] = v00;
+      topIndices[topIdxCount++] = v01;
+      topIndices[topIdxCount++] = v10;
+      topIndices[topIdxCount++] = v10;
+      topIndices[topIdxCount++] = v01;
+      topIndices[topIdxCount++] = v11;
+
+      // Bottom surface: CW winding (reversed) so triangles face downward
+      underIndices[underIdxCount++] = v00;
+      underIndices[underIdxCount++] = v10;
+      underIndices[underIdxCount++] = v01;
+      underIndices[underIdxCount++] = v10;
+      underIndices[underIdxCount++] = v11;
+      underIndices[underIdxCount++] = v01;
+    }
+  }
+
+  // --- Step 5: Side walls ---
+  // For each grid edge where both vertices are island but at least one adjacent
+  // quad has a non-island vertex, emit a wall quad connecting top and bottom.
+  // Wall vertices need their own normals (outward-facing), so we append them.
+
+  // We'll add wall vertices to the underside mesh's vertex buffer
+  let wallVertCount = 0;
+  const maxWallVerts = islandCount * 8; // generous
+  const wallVertices = new Float32Array(maxWallVerts * MESH_VERTEX_STRIDE);
+
+  // Helper to add a wall quad between two boundary edge vertices
+  function addWallQuad(
+    aIdx: number, bIdx: number,
+    // Which side is "outside" — used for normal direction
+    outsideX: number, outsideZ: number,
+  ): void {
+    const ax = positions[aIdx * 2]!;
+    const az = positions[aIdx * 2 + 1]!;
+    const bx = positions[bIdx * 2]!;
+    const bz = positions[bIdx * 2 + 1]!;
+
+    const topAy = topYGrid[aIdx]!;
+    const topBy = topYGrid[bIdx]!;
+    const botAy = bottomYGrid[aIdx]!;
+    const botBy = bottomYGrid[bIdx]!;
+
+    // Edge direction
+    const edx = bx - ax;
+    const edz = bz - az;
+    // Normal perpendicular to edge, pointing toward outside
+    let nx = -edz;
+    let nz = edx;
+    // Check direction
+    const midX = (ax + bx) * 0.5;
+    const midZ = (az + bz) * 0.5;
+    if (nx * (outsideX - midX) + nz * (outsideZ - midZ) < 0) {
+      nx = -nx;
+      nz = -nz;
+    }
+    const nlen = Math.sqrt(nx * nx + nz * nz);
+    if (nlen < 0.001) return;
+    nx /= nlen;
+    nz /= nlen;
+
+    // 4 wall vertices: topA, topB, botB, botA
+    const baseIdx = topVertCount + wallVertCount;
+    const wOff0 = wallVertCount * MESH_VERTEX_STRIDE;
+    const wOff1 = (wallVertCount + 1) * MESH_VERTEX_STRIDE;
+    const wOff2 = (wallVertCount + 2) * MESH_VERTEX_STRIDE;
+    const wOff3 = (wallVertCount + 3) * MESH_VERTEX_STRIDE;
+
+    // topA
+    wallVertices[wOff0] = ax; wallVertices[wOff0 + 1] = az;
+    wallVertices[wOff0 + 2] = topAy / heightScale;
+    wallVertices[wOff0 + 3] = 0;
+    wallVertices[wOff0 + 4] = nx; wallVertices[wOff0 + 5] = 0; wallVertices[wOff0 + 6] = nz;
+
+    // topB
+    wallVertices[wOff1] = bx; wallVertices[wOff1 + 1] = bz;
+    wallVertices[wOff1 + 2] = topBy / heightScale;
+    wallVertices[wOff1 + 3] = 0;
+    wallVertices[wOff1 + 4] = nx; wallVertices[wOff1 + 5] = 0; wallVertices[wOff1 + 6] = nz;
+
+    // botB
+    wallVertices[wOff2] = bx; wallVertices[wOff2 + 1] = bz;
+    wallVertices[wOff2 + 2] = botBy / heightScale;
+    wallVertices[wOff2 + 3] = 0;
+    wallVertices[wOff2 + 4] = nx; wallVertices[wOff2 + 5] = 0; wallVertices[wOff2 + 6] = nz;
+
+    // botA
+    wallVertices[wOff3] = ax; wallVertices[wOff3 + 1] = az;
+    wallVertices[wOff3 + 2] = botAy / heightScale;
+    wallVertices[wOff3 + 3] = 0;
+    wallVertices[wOff3 + 4] = nx; wallVertices[wOff3 + 5] = 0; wallVertices[wOff3 + 6] = nz;
+
+    // Two triangles: topA, topB, botB and topA, botB, botA (outward facing)
+    underIndices[underIdxCount++] = baseIdx;
+    underIndices[underIdxCount++] = baseIdx + 1;
+    underIndices[underIdxCount++] = baseIdx + 2;
+    underIndices[underIdxCount++] = baseIdx;
+    underIndices[underIdxCount++] = baseIdx + 2;
+    underIndices[underIdxCount++] = baseIdx + 3;
+
+    wallVertCount += 4;
+  }
+
+  // Scan horizontal edges (row-direction: g00→g10)
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols - 1; col++) {
+      const g0 = row * cols + col;
+      const g1 = g0 + 1;
+      if (!isIsland[g0] || !isIsland[g1]) continue;
+
+      // Check if this edge is on a boundary:
+      // above row (row-1) or below row (row+1) has a non-island vertex
+      const aboveHasGap = row === 0 ||
+        !isIsland[(row - 1) * cols + col] ||
+        !isIsland[(row - 1) * cols + col + 1];
+      const belowHasGap = row === rows - 1 ||
+        !isIsland[(row + 1) * cols + col] ||
+        !isIsland[(row + 1) * cols + col + 1];
+
+      if (aboveHasGap) {
+        // Outside is above (lower Z)
+        const outsideZ = originZ + (row - 1) * spacing;
+        const outsideX = positions[g0 * 2]!;
+        addWallQuad(g1, g0, outsideX, outsideZ);
+      }
+      if (belowHasGap) {
+        // Outside is below (higher Z)
+        const outsideZ = originZ + (row + 1) * spacing;
+        const outsideX = positions[g0 * 2]!;
+        addWallQuad(g0, g1, outsideX, outsideZ);
+      }
+    }
+  }
+
+  // Scan vertical edges (col-direction: g00→g01)
+  for (let row = 0; row < rows - 1; row++) {
+    for (let col = 0; col < cols; col++) {
+      const g0 = row * cols + col;
+      const g1 = (row + 1) * cols + col;
+      if (!isIsland[g0] || !isIsland[g1]) continue;
+
+      const leftHasGap = col === 0 ||
+        !isIsland[row * cols + col - 1] ||
+        !isIsland[(row + 1) * cols + col - 1];
+      const rightHasGap = col === cols - 1 ||
+        !isIsland[row * cols + col + 1] ||
+        !isIsland[(row + 1) * cols + col + 1];
+
+      if (leftHasGap) {
+        const outsideX = originX + (col - 1) * spacing;
+        const outsideZ = positions[g0 * 2 + 1]!;
+        addWallQuad(g0, g1, outsideX, outsideZ);
+      }
+      if (rightHasGap) {
+        const outsideX = originX + (col + 1) * spacing;
+        const outsideZ = positions[g0 * 2 + 1]!;
+        addWallQuad(g1, g0, outsideX, outsideZ);
+      }
+    }
+  }
+
+  // --- Combine underside + wall vertices ---
+  const totalUnderVerts = topVertCount + wallVertCount;
+  const combinedUnderVerts = new Float32Array(totalUnderVerts * MESH_VERTEX_STRIDE);
+  combinedUnderVerts.set(bottomVertices.subarray(0, topVertCount * MESH_VERTEX_STRIDE));
+  combinedUnderVerts.set(
+    wallVertices.subarray(0, wallVertCount * MESH_VERTEX_STRIDE),
+    topVertCount * MESH_VERTEX_STRIDE,
+  );
+
+  return {
+    top: {
+      vertices: topVertices.subarray(0, topVertCount * MESH_VERTEX_STRIDE),
+      indices: topIndices.subarray(0, topIdxCount),
+      vertexCount: topVertCount,
+      indexCount: topIdxCount,
+    },
+    underside: {
+      vertices: combinedUnderVerts,
+      indices: underIndices.subarray(0, underIdxCount),
+      vertexCount: totalUnderVerts,
+      indexCount: underIdxCount,
+    },
+  };
+}

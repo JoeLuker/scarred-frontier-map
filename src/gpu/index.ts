@@ -7,6 +7,8 @@ export { HexStateTexture } from './hex-state-texture';
 export { TerrainCompute, GpuTerrainProvider, terrainFromId, elementFromId, flavorFromId } from './terrain-compute';
 export { MeshCompute } from './mesh-compute';
 export { IslandCompute } from './island-compute';
+export { buildIslandMesh } from './island-mesh';
+export type { IslandMeshResult, IslandRenderParams } from './island-mesh';
 export { getViewProjection, screenToGround, worldToScreen, getEyePosition } from './camera';
 export type { OrbitalCamera } from './camera';
 export { TERRAIN_ORDER, OBJECT_FLAGS } from './types';
