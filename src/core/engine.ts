@@ -56,16 +56,16 @@ export class WorldEngine {
     const results = await provider.generate(config, grid.length);
     const hexes = mergeTerrain(grid, results);
 
-    const positiveDefaults = PLANAR_DEFAULTS[PlanarAlignment.POSITIVE];
+    const airDefaults = PLANAR_DEFAULTS[PlanarAlignment.AIR];
     const defaultOverlay: PlanarOverlay = {
       id: 'PLANE-default',
-      type: PlanarAlignment.POSITIVE,
+      type: PlanarAlignment.AIR,
       coordinates: { q: 0, r: 0 },
-      radius: WORLD.GRID_RADIUS,
-      intensity: positiveDefaults.intensity,
-      falloff: positiveDefaults.falloff,
-      fragmentation: positiveDefaults.fragmentation,
-      lift: positiveDefaults.lift,
+      radius: airDefaults.radius,
+      intensity: airDefaults.intensity,
+      falloff: airDefaults.falloff,
+      fragmentation: airDefaults.fragmentation,
+      lift: airDefaults.lift,
     };
     const overlays = [defaultOverlay];
     const hexesWithOverlay = applyOverlaysToMap(hexes, overlays);
