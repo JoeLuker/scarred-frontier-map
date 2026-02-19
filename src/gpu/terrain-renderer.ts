@@ -153,8 +153,11 @@ fn vs_main(in: VertexIn) -> VertexOut {
     if (is_island_layer) {
       // Pass floating mask to fragment for discard (avoids expensive noise recompute)
       island_mask = is_floating;
+      // Per-chunk altitude variation — low-freq noise gives each chunk its own height
+      let chunk_alt = value_noise(in.pos_xz * 0.004);
+      let alt_mul = 0.8 + chunk_alt * 0.4;
       // Lift: ~1.5 to 4 hex sizes of visible gap at max intensity
-      let lift = mix(0.015, 0.04, lift_t) * hs;
+      let lift = mix(0.015, 0.04, lift_t) * hs * alt_mul;
       y += lift;
     } else {
       // Ground: depress where islands lifted from

@@ -40,6 +40,19 @@ const BASE_THICKNESS = 0.012;  // Fraction of heightScale
 const NOISE_AMP = 0.004;       // Fraction of heightScale for rocky noise
 const NOISE_FREQ = 0.06;       // World-space frequency for underside noise
 
+// Must match terrain-mesh.ts displacementCurve (also in VS)
+function displacementCurve(h: number): number {
+  return h * h * h;
+}
+
+// Replicate VS Air branch smoothing: y = mix(y, median_y, smooth_t * 0.3)
+// This is applied BEFORE lift, matching the VS order.
+function applyAirSmoothing(y: number, heightScale: number, pi: number): number {
+  const smoothT = Math.min(1, pi / 0.4);
+  const medianY = displacementCurve(0.35) * heightScale;
+  return y + (medianY - y) * smoothT * 0.3;
+}
+
 export function buildIslandMesh(
   classifyData: Float32Array,
   grid: TerrainGridData,
@@ -96,8 +109,10 @@ export function buildIslandMesh(
 
     const elev = elevations[i]!;
     const baseY = computeDisplacedY(elev, seaLevel, landRange, heightScale);
+    const pi = classifyData[i * 4 + 2]!; // planar_intensity
+    const smoothedY = applyAirSmoothing(baseY, heightScale, pi);
     const liftHeight = classifyData[i * 4 + 1]!;
-    const topY = baseY + liftHeight;
+    const topY = smoothedY + liftHeight;
     topYGrid[i] = topY;
 
     // Underside: thickness tapers from center to edge using is_floating^2
@@ -226,7 +241,7 @@ export function buildIslandMesh(
 
   // We'll add wall vertices to the underside mesh's vertex buffer
   let wallVertCount = 0;
-  const maxWallVerts = islandCount * 8; // generous
+  const maxWallVerts = islandCount * 16; // 4 verts per wall quad, up to 4 boundary edges per vertex
   const wallVertices = new Float32Array(maxWallVerts * MESH_VERTEX_STRIDE);
 
   // Helper to add a wall quad between two boundary edge vertices
