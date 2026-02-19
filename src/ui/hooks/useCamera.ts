@@ -19,6 +19,28 @@ export const useCamera = (
   const lastMouse = useRef({ x: 0, y: 0 });
   const totalDragDistance = useRef(0);
 
+  // WASD keyboard panning
+  const keysDown = useRef(new Set<string>());
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const k = e.key.toLowerCase();
+      if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
+        keysDown.current.add(k);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      keysDown.current.delete(e.key.toLowerCase());
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
+
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     // All mouse buttons = pan (orbit is handled by trackpad scroll)
     isDragging.current = true;
@@ -99,6 +121,28 @@ export const useCamera = (
     return () => canvas.removeEventListener('wheel', onWheel);
   }, [canvasRef]);
 
+  /** Apply WASD pan movement. Call once per frame. */
+  const tickKeys = useCallback(() => {
+    const keys = keysDown.current;
+    if (keys.size === 0) return;
+
+    const cam = camera.current;
+    const speed = cam.distance * 0.012;
+    const cosAz = Math.cos(cam.azimuth);
+    const sinAz = Math.sin(cam.azimuth);
+
+    // Forward/back = along camera look direction on ground plane
+    let dx = 0;
+    let dz = 0;
+    if (keys.has('w')) { dx += sinAz; dz += cosAz; }
+    if (keys.has('s')) { dx -= sinAz; dz -= cosAz; }
+    if (keys.has('a')) { dx += cosAz; dz -= sinAz; }
+    if (keys.has('d')) { dx -= cosAz; dz += sinAz; }
+
+    cam.targetX += dx * speed;
+    cam.targetZ += dz * speed;
+  }, []);
+
   /** Compute the current view-projection matrix for the given aspect ratio. */
   const computeViewProjection = useCallback((aspect: number): Float32Array => {
     return getViewProjection(camera.current, CAMERA.FOV, aspect, CAMERA.NEAR, CAMERA.FAR);
@@ -118,5 +162,6 @@ export const useCamera = (
     handleMouseUp,
     computeViewProjection,
     setCamera,
+    tickKeys,
   };
 };

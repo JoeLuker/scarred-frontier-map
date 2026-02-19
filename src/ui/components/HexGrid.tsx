@@ -125,6 +125,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
     handleMouseUp: onCamUp,
     computeViewProjection,
     setCamera,
+    tickKeys,
   } = useCamera(canvasRef, containerRef);
 
   // --- Sync refs + rebuild lookup map when hexes change ---
@@ -515,6 +516,9 @@ export const HexGrid: React.FC<HexGridProps> = ({
     const container = containerRef.current;
     if (!scene || !canvas || !gpuCanvas || !container) return;
 
+    // --- WASD keyboard panning ---
+    tickKeys();
+
     // --- FPS tracking ---
     const fpsState = fpsRef.current;
     fpsState.frames++;
@@ -641,7 +645,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
         ctx.fillText(overlay.type.substring(9, 11).toUpperCase(), screen.x, screen.y);
       });
     }
-  }, [computeViewProjection, camera]);
+  }, [computeViewProjection, camera, tickKeys]);
 
   // ===================================================================
   // Render Loop
