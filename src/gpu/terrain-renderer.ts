@@ -152,27 +152,24 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
     let is_island_layer = (obj.flags & 4u) != 0u;
 
-    // Both layers: smooth terrain toward median
+    // Smoothing scales with intensity² — barely visible at overlay edges,
+    // ramps up in the interior. Prevents sharp cliffs at overlay boundary.
     let median_y = displacement_curve(0.35) * hs;
-    let smooth_t = saturate(vt_pi / 0.4);
+    let smooth_t = vt_pi * vt_pi;
 
     if (is_island_layer) {
       // Stronger smoothing for islands — flattens terrain for clean floating surfaces
       y = mix(y, median_y, smooth_t * 0.6);
-      // Pass floating mask to fragment for discard (avoids expensive noise recompute)
       island_mask = is_floating;
       // Per-chunk altitude variation: noise frequency below chunk frequency
       // so each chunk gets a roughly uniform altitude offset.
       let chunk_alt = value_noise(in.pos_xz * base_freq * 0.3);
       let alt_mul = 0.7 + chunk_alt * 0.6; // 0.7x to 1.3x per-chunk
-      // Lift slider controls height
       let lift = mix(0.005, 0.12, lift_param) * lift_t * hs * alt_mul;
       y += lift;
     } else {
-      // Ground: gentle smoothing
       y = mix(y, median_y, smooth_t * 0.3);
       // Terrain ripped away where islands were torn out.
-      // Pulls terrain toward below-sea-level, creating visible craters.
       let gouge_target = -0.008 * hs;
       let gouge_factor = is_floating * lift_t * mix(0.4, 0.9, lift_param);
       y = mix(y, gouge_target, gouge_factor);

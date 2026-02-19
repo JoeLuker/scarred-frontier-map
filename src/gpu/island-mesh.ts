@@ -56,10 +56,10 @@ function displacementCurve(h: number): number {
   return h * h * h;
 }
 
-// Replicate VS Air island-layer smoothing: y = mix(y, median_y, smooth_t * 0.6)
-// Stronger than ground layer (0.3) for clean floating surfaces.
+// Replicate VS Air island-layer smoothing: y = mix(y, median_y, pi² * 0.6)
+// Intensity² ensures smooth fade at overlay boundary edges.
 function applyAirSmoothing(y: number, heightScale: number, pi: number): number {
-  const smoothT = Math.min(1, pi / 0.4);
+  const smoothT = pi * pi;
   const medianY = displacementCurve(0.35) * heightScale;
   return y + (medianY - y) * smoothT * 0.6;
 }
