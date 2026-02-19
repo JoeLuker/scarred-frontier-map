@@ -49,9 +49,8 @@ export function createTerrainMaterial(
   return { id: 'terrain', pipeline, usesObjectGroup: true };
 }
 
-/** Island pipeline: same as terrain but with back-face culling.
- *  Island meshes are thin shells — without culling, backfaces of the top
- *  surface are visible from below and vice versa, creating 2D artifacts. */
+/** Island pipeline: separate material for island meshes.
+ *  Identical to terrain for now, but kept separate for future culling/blending. */
 export function createIslandMaterial(
   device: GPUDevice,
   shader: GPUShaderModule,
@@ -72,7 +71,7 @@ export function createIslandMaterial(
       entryPoint: 'fs_main',
       targets: [{ format }],
     },
-    primitive: { topology: 'triangle-list', cullMode: 'back' },
+    primitive: { topology: 'triangle-list', cullMode: 'none' },
     depthStencil: {
       depthWriteEnabled: true,
       depthCompare: 'less',
