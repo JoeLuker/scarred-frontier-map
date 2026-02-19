@@ -14,6 +14,7 @@ import {
   createSkyMaterial,
   TerrainMesh,
   buildTerrainMesh,
+  buildIslandMesh,
   computeDisplacedY,
   HexStateTexture,
   MeshCompute,
@@ -104,6 +105,9 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
   // Track what hex state was built for
   const hexStateSourceRef = useRef<HexData[] | null>(null);
+
+  // Island mesh rebuild key — serialized Air overlay state
+  const islandKeyRef = useRef('');
 
   // O(1) hex coordinate → array index lookup
   const hexLookupRef = useRef<Map<string, number>>(new Map());
@@ -298,16 +302,73 @@ export const HexGrid: React.FC<HexGridProps> = ({
     hexState.update(hexes);
   }, [hexes]);
 
-  // --- Toggle island layer visibility when Air overlays are present ---
+  // --- Rebuild island meshes when Air overlays or terrain change ---
   useEffect(() => {
     const scene = sceneRef.current;
-    if (!scene) return;
-    const hasAir = planarOverlays.some(o => o.type === PlanarAlignment.AIR);
+    const ic = islandComputeRef.current;
+    const topMesh = islandTopMeshRef.current;
+    const underMesh = islandUnderMeshRef.current;
+    const grid = terrainGridRef.current;
+    if (!scene || !ic || !topMesh || !underMesh) return;
+
     const islandTop = scene.getObject('island-top');
     const islandUnder = scene.getObject('island-under');
-    if (islandTop) islandTop.visible = hasAir;
-    if (islandUnder) islandUnder.visible = hasAir;
-  }, [planarOverlays]);
+    if (!islandTop || !islandUnder) return;
+
+    // Check if Air overlays are present
+    const airOverlays = planarOverlays.filter(o => o.type === PlanarAlignment.AIR);
+    const hasAir = airOverlays.length > 0;
+
+    if (!hasAir || !grid) {
+      islandTop.visible = false;
+      islandUnder.visible = false;
+      islandKeyRef.current = '';
+      return;
+    }
+
+    // Serialize Air overlay state to detect changes
+    const key = airOverlays.map(o =>
+      `${o.id}:${o.coordinates.q},${o.coordinates.r}:${o.intensity}:${o.radius}:${o.falloff}`
+    ).sort().join('|') + `|cfg:${worldConfig.seed}`;
+
+    if (key === islandKeyRef.current) {
+      islandTop.visible = true;
+      islandUnder.visible = true;
+      return;
+    }
+    islandKeyRef.current = key;
+
+    const cfg = worldConfig;
+    const { seaLevel, landRange, heightScale } = getTerrainRenderParams(cfg);
+    let cancelled = false;
+
+    requestIdleCallback(() => {
+      if (cancelled) return;
+      ic.classify(
+        grid.positions,
+        grid.cols * grid.rows,
+        WORLD.HEX_SIZE,
+        WORLD.GRID_RADIUS,
+        heightScale,
+        seaLevel,
+      ).then(classifyData => {
+        if (cancelled) return;
+        const result = buildIslandMesh(classifyData, grid, { seaLevel, landRange, heightScale });
+        if (!result) {
+          islandTop.visible = false;
+          islandUnder.visible = false;
+          return;
+        }
+        topMesh.upload(result.top);
+        underMesh.upload(result.underside);
+        islandTop.visible = true;
+        islandUnder.visible = true;
+        console.log(`Island mesh: top ${result.top.vertexCount}v/${result.top.indexCount / 3}t, under ${result.underside.vertexCount}v/${result.underside.indexCount / 3}t`);
+      });
+    });
+
+    return () => { cancelled = true; };
+  }, [planarOverlays, worldConfig, hexes]);
 
   // --- Focus hex ---
   useEffect(() => {

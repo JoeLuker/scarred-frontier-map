@@ -33,7 +33,7 @@ struct Uniforms {
 // Per-object configuration (scene graph — identity model for terrain/sea)
 struct ObjectConfig {
   model: mat4x4f,   // 64 bytes — world transform
-  flags: u32,       // 4 bytes  — bit 0: IS_TERRAIN, bit 1: IS_SEA, bit 2: IS_ISLAND_LAYER
+  flags: u32,       // 4 bytes  — bit 0: IS_TERRAIN, bit 1: IS_SEA, bit 2: IS_ISLAND_LAYER, bit 3: IS_ISLAND_UNDERSIDE
   _pad0: u32,
   _pad1: u32,
   _pad2: u32,       // total: 80 bytes (16-byte aligned)
@@ -75,6 +75,23 @@ fn vs_main(in: VertexIn) -> VertexOut {
   let sea = u.sea_level;
   let land_range = max(1.0 - sea, 0.001);
   let hs = u.height_scale;
+
+  // Island underside: elevation field stores normalized world Y directly.
+  // Skip displacement_curve and all planar displacement — geometry is pre-baked.
+  if ((obj.flags & 8u) != 0u) {
+    let y = in.elevation * hs;
+    let local = vec4f(in.pos_xz.x, y, in.pos_xz.y, 1.0);
+    let world = (obj.model * local).xyz;
+    let clip = u.view_proj * vec4f(world, 1.0);
+    var out: VertexOut;
+    out.clip_pos = clip;
+    out.world_pos = world;
+    out.elevation = in.elevation;
+    out.moisture = in.moisture;
+    out.smooth_normal = in.normal;
+    out.island_mask = 1.0;
+    return out;
+  }
 
   // Base elevation displacement. Rivers have elevation = seaLevel,
   // so normElev = 0 → displacement_curve(0) = 0 → no displacement.
@@ -616,6 +633,43 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   // Island layer: discard non-floating fragments via vertex-interpolated mask.
   // island_mask = 0 for island-layer verts in non-Air hexes or non-floating areas.
   if (in.island_mask < 0.1) { discard; }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Island underside: rocky material with simplified lighting.
+  // Early return — no biome, no hex grid, no snow.
+  // ═══════════════════════════════════════════════════════════════
+  if ((obj.flags & 8u) != 0u) {
+    let rock_n = value_noise(in.world_pos.xz * 0.08);
+    let strata = value_noise(in.world_pos.xz * vec2f(0.3, 0.02));
+    let detail = value_noise(in.world_pos.xz * 0.25);
+    let base_rock = vec3f(0.30, 0.26, 0.22);
+    let light_rock = vec3f(0.42, 0.38, 0.32);
+    var color = mix(base_rock, light_rock, rock_n * 0.6 + strata * 0.3);
+    color *= (0.85 + detail * 0.3);
+
+    // Simple lighting with vertex normal
+    let N = normalize(in.smooth_normal);
+    let NdotL = dot(N, normalize(SUN_DIR));
+    let wrapped = saturate((NdotL + 0.4) / 1.4);
+    let lit = color * mix(vec3f(0.08, 0.10, 0.14), SUN_COLOR * 0.55, wrapped);
+
+    // Atmospheric fog (same as terrain)
+    let view_dist = length(in.world_pos - u.eye_pos);
+    let view_to_frag = normalize(in.world_pos - u.eye_pos);
+    let fog_amount = 1.0 - exp(-view_dist * FOG_DENSITY);
+    let sun_alignment = max(dot(view_to_frag, normalize(SUN_DIR)), 0.0);
+    let rayleigh_color = mix(
+      vec3f(0.35, 0.45, 0.7),
+      vec3f(0.7, 0.6, 0.45),
+      sun_alignment * sun_alignment
+    );
+    let mie = pow(sun_alignment, 8.0) * 0.3;
+    let scatter_color = mix(rayleigh_color, SUN_COLOR, mie);
+    var final_color = mix(lit, scatter_color, fog_amount);
+
+    final_color = aces_tonemap(final_color * 0.95);
+    return vec4f(clamp(final_color, vec3f(0.0), vec3f(1.0)), 1.0);
+  }
 
   // Beyond the hex grid: force water rendering (deep ocean).
   // The sea quad mesh goes through this same shader — no separate sea pipeline.
