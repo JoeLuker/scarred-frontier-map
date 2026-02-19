@@ -10,6 +10,23 @@ export interface MeshBuffers {
   readonly indexCount: number;
 }
 
+export interface TerrainGridData {
+  readonly positions: Float32Array;   // [x, z, x, z, ...] pairs
+  readonly elevations: Float32Array;
+  readonly moistures: Float32Array;
+  readonly cols: number;
+  readonly rows: number;
+  readonly originX: number;
+  readonly originZ: number;
+  readonly spacing: number;
+  readonly cullRadius2: number;
+}
+
+export interface TerrainMeshResult {
+  readonly mesh: MeshBuffers;
+  readonly grid: TerrainGridData;
+}
+
 // --- Height displacement ---
 // Must match terrain-renderer.ts WGSL displacement_curve().
 // Cubic ease-in: pow(h, 3) compresses low/mid elevations so only the highest
@@ -129,7 +146,7 @@ export async function buildTerrainMesh(
   gridRadius: number,
   hexSize: number,
   spacing: number,
-): Promise<MeshBuffers> {
+): Promise<TerrainMeshResult> {
   const SQRT3 = Math.sqrt(3);
   const worldRadius = gridRadius * hexSize * SQRT3;
   const cullRadius2 = (worldRadius + spacing * 2) * (worldRadius + spacing * 2);
@@ -258,10 +275,23 @@ export async function buildTerrainMesh(
   }
 
   return {
-    vertices: vertexData.subarray(0, vertCount * MESH_VERTEX_STRIDE),
-    indices: indexData.subarray(0, idxCount),
-    vertexCount: vertCount,
-    indexCount: idxCount,
+    mesh: {
+      vertices: vertexData.subarray(0, vertCount * MESH_VERTEX_STRIDE),
+      indices: indexData.subarray(0, idxCount),
+      vertexCount: vertCount,
+      indexCount: idxCount,
+    },
+    grid: {
+      positions: gpuPositions,
+      elevations,
+      moistures,
+      cols,
+      rows,
+      originX,
+      originZ,
+      spacing,
+      cullRadius2,
+    },
   };
 }
 

@@ -1,0 +1,341 @@
+/**
+ * GPU compute pipeline for classifying terrain vertices as floating island chunks.
+ * Uses the SAME hash2/value_noise/fbm3 functions as the render shader (terrain-renderer.ts)
+ * — NOT the terrain-noise.wgsl.ts functions used for biome generation.
+ * Also reads hex_state_tex to get per-vertex planar type and intensity.
+ */
+
+function createIslandClassifyShader(): string {
+  return /* wgsl */ `
+
+struct IslandConfig {
+  hex_size: f32,
+  grid_radius: f32,
+  height_scale: f32,
+  sea_level: f32,
+  vertex_count: u32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> config: IslandConfig;
+@group(0) @binding(1) var<storage, read> positions: array<vec2f>;
+@group(0) @binding(2) var<storage, read_write> results: array<vec4f>;
+@group(0) @binding(3) var hex_state_tex: texture_2d<f32>;
+
+// ============================================================
+// Hash / noise — MUST match terrain-renderer.ts exactly
+// ============================================================
+
+const SQRT3: f32 = 1.7320508075688772;
+
+fn hash2(p: vec2f) -> f32 {
+  var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+fn value_noise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  let a = hash2(i);
+  let b = hash2(i + vec2f(1.0, 0.0));
+  let c = hash2(i + vec2f(0.0, 1.0));
+  let d = hash2(i + vec2f(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+fn fbm3(p: vec2f) -> f32 {
+  var val = 0.0;
+  var amp = 0.5;
+  var pos = p;
+  for (var i = 0; i < 3; i++) {
+    val += amp * value_noise(pos);
+    pos *= 2.03;
+    amp *= 0.5;
+  }
+  return val;
+}
+
+// ============================================================
+// Hex conversion — MUST match terrain-renderer.ts exactly
+// ============================================================
+
+fn pixel_to_hex_qr(wx: f32, wz: f32, hex_size: f32) -> vec2f {
+  let inv_sqrt3 = 1.0 / SQRT3;
+  let fq = (inv_sqrt3 * wx / hex_size) - (wz / (3.0 * hex_size));
+  let fr = (2.0 / 3.0) * wz / hex_size;
+
+  let fx = fq;
+  let fz = fr;
+  let fy = -fx - fz;
+
+  var rx = round(fx);
+  var ry = round(fy);
+  var rz = round(fz);
+  let dx = abs(rx - fx);
+  let dy = abs(ry - fy);
+  let dz = abs(rz - fz);
+  if (dx > dy && dx > dz) {
+    rx = -ry - rz;
+  } else if (dy > dz) {
+    ry = -rx - rz;
+  } else {
+    rz = -rx - ry;
+  }
+
+  return vec2f(rx, rz);
+}
+
+fn lookup_hex_state(hex_qr: vec2f, grid_radius: f32) -> vec4f {
+  let rq = hex_qr.x;
+  let rr = hex_qr.y;
+  let tex_size = grid_radius * 2.0 + 1.0;
+  let tx = (rq + grid_radius) / tex_size;
+  let tz = (rr + grid_radius) / tex_size;
+
+  if (tx < 0.0 || tx > 1.0 || tz < 0.0 || tz > 1.0) {
+    return vec4f(0.0, 0.0, 0.0, 0.0);
+  }
+
+  let tex_coord = vec2i(i32(rq + grid_radius), i32(rr + grid_radius));
+  return textureLoad(hex_state_tex, tex_coord, 0);
+}
+
+// ============================================================
+// Compute kernel: per-vertex island classification
+// ============================================================
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = gid.x;
+  if (idx >= config.vertex_count) { return; }
+
+  let pos = positions[idx];
+
+  // Look up hex state at this vertex position
+  let hex_qr = pixel_to_hex_qr(pos.x, pos.y, config.hex_size);
+  let hex_state = lookup_hex_state(hex_qr, config.grid_radius);
+  let plane_type = u32(round(hex_state.g * 255.0));
+  let planar_intensity = hex_state.b;
+
+  // Only Air plane (type 4) creates floating islands
+  if (plane_type != 4u) {
+    results[idx] = vec4f(0.0, 0.0, planar_intensity, 0.0);
+    return;
+  }
+
+  // Chunk noise — same as vertex shader Air branch
+  let chunk = fbm3(pos * 0.008) * 0.7 + value_noise(pos * 0.03) * 0.3;
+  let lift_t = saturate((planar_intensity - 0.3) / 0.5);
+  let threshold = mix(0.75, 0.15, lift_t);
+  let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
+
+  // Per-chunk lift variation: low-freq noise gives each chunk its own altitude
+  let chunk_alt = value_noise(pos * 0.004);
+  let alt_mul = 0.8 + chunk_alt * 0.4; // 0.8x to 1.2x
+
+  // Lift height — same formula as VS Air branch
+  let base_lift = mix(0.015, 0.04, lift_t) * config.height_scale;
+  let lift_height = base_lift * alt_mul;
+
+  results[idx] = vec4f(is_floating, lift_height, planar_intensity, 0.0);
+}
+`;
+}
+
+// IslandConfig: 4 f32 + 4 u32 = 8 × 4 = 32 bytes
+const CONFIG_BUFFER_SIZE = 32;
+
+export class IslandCompute {
+  private device: GPUDevice;
+  private pipeline: GPUComputePipeline;
+  private configBuffer: GPUBuffer;
+  private posBuffer: GPUBuffer;
+  private resultBuffer: GPUBuffer;
+  private readbackBuffer: GPUBuffer;
+  private bindGroupLayout: GPUBindGroupLayout;
+  private bindGroup: GPUBindGroup;
+  private hexStateTexture: GPUTexture;
+  private maxVertices: number;
+
+  private constructor(
+    device: GPUDevice,
+    pipeline: GPUComputePipeline,
+    configBuffer: GPUBuffer,
+    posBuffer: GPUBuffer,
+    resultBuffer: GPUBuffer,
+    readbackBuffer: GPUBuffer,
+    bindGroupLayout: GPUBindGroupLayout,
+    bindGroup: GPUBindGroup,
+    hexStateTexture: GPUTexture,
+    maxVertices: number,
+  ) {
+    this.device = device;
+    this.pipeline = pipeline;
+    this.configBuffer = configBuffer;
+    this.posBuffer = posBuffer;
+    this.resultBuffer = resultBuffer;
+    this.readbackBuffer = readbackBuffer;
+    this.bindGroupLayout = bindGroupLayout;
+    this.bindGroup = bindGroup;
+    this.hexStateTexture = hexStateTexture;
+    this.maxVertices = maxVertices;
+  }
+
+  static create(device: GPUDevice, hexStateTexture: GPUTexture, maxVertices: number): IslandCompute {
+    const shaderModule = device.createShaderModule({ code: createIslandClassifyShader() });
+
+    const bindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d' } },
+      ],
+    });
+
+    const pipeline = device.createComputePipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
+      compute: { module: shaderModule, entryPoint: 'main' },
+    });
+
+    const configBuffer = device.createBuffer({
+      size: CONFIG_BUFFER_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const posBuffer = device.createBuffer({
+      size: maxVertices * 8,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+
+    // results: vec4f per vertex = 16 bytes
+    const resultBuffer = device.createBuffer({
+      size: maxVertices * 16,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+
+    const readbackBuffer = device.createBuffer({
+      size: maxVertices * 16,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+
+    const bindGroup = device.createBindGroup({
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: configBuffer } },
+        { binding: 1, resource: { buffer: posBuffer } },
+        { binding: 2, resource: { buffer: resultBuffer } },
+        { binding: 3, resource: hexStateTexture.createView() },
+      ],
+    });
+
+    return new IslandCompute(
+      device, pipeline, configBuffer, posBuffer, resultBuffer,
+      readbackBuffer, bindGroupLayout, bindGroup, hexStateTexture, maxVertices,
+    );
+  }
+
+  updateHexState(texture: GPUTexture): void {
+    this.hexStateTexture = texture;
+    this.bindGroup = this.device.createBindGroup({
+      layout: this.bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.configBuffer } },
+        { binding: 1, resource: { buffer: this.posBuffer } },
+        { binding: 2, resource: { buffer: this.resultBuffer } },
+        { binding: 3, resource: texture.createView() },
+      ],
+    });
+  }
+
+  async classify(
+    positions: Float32Array,
+    vertexCount: number,
+    hexSize: number,
+    gridRadius: number,
+    heightScale: number,
+    seaLevel: number,
+  ): Promise<Float32Array> {
+    // Grow buffers if needed
+    if (vertexCount > this.maxVertices) {
+      this.posBuffer.destroy();
+      this.resultBuffer.destroy();
+      this.readbackBuffer.destroy();
+
+      this.maxVertices = Math.ceil(vertexCount * 1.5);
+
+      this.posBuffer = this.device.createBuffer({
+        size: this.maxVertices * 8,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      this.resultBuffer = this.device.createBuffer({
+        size: this.maxVertices * 16,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      });
+      this.readbackBuffer = this.device.createBuffer({
+        size: this.maxVertices * 16,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      });
+
+      this.bindGroup = this.device.createBindGroup({
+        layout: this.bindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.configBuffer } },
+          { binding: 1, resource: { buffer: this.posBuffer } },
+          { binding: 2, resource: { buffer: this.resultBuffer } },
+          { binding: 3, resource: this.hexStateTexture.createView() },
+        ],
+      });
+    }
+
+    // Upload positions
+    this.device.queue.writeBuffer(this.posBuffer, 0, positions, 0, vertexCount * 2);
+
+    // Upload config
+    const configData = new ArrayBuffer(CONFIG_BUFFER_SIZE);
+    const f32 = new Float32Array(configData);
+    const u32 = new Uint32Array(configData);
+    f32[0] = hexSize;
+    f32[1] = gridRadius;
+    f32[2] = heightScale;
+    f32[3] = seaLevel;
+    u32[4] = vertexCount;
+    u32[5] = 0;
+    u32[6] = 0;
+    u32[7] = 0;
+    this.device.queue.writeBuffer(this.configBuffer, 0, configData);
+
+    // Dispatch
+    const workgroups = Math.ceil(vertexCount / 64);
+    const encoder = this.device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, this.bindGroup);
+    pass.dispatchWorkgroups(workgroups);
+    pass.end();
+
+    const byteCount = vertexCount * 16;
+    encoder.copyBufferToBuffer(this.resultBuffer, 0, this.readbackBuffer, 0, byteCount);
+    this.device.queue.submit([encoder.finish()]);
+
+    // Read back
+    await this.readbackBuffer.mapAsync(GPUMapMode.READ, 0, byteCount);
+    const range = this.readbackBuffer.getMappedRange(0, byteCount);
+    const result = new Float32Array(vertexCount * 4);
+    result.set(new Float32Array(range));
+    this.readbackBuffer.unmap();
+
+    return result;
+  }
+
+  destroy(): void {
+    this.configBuffer.destroy();
+    this.posBuffer.destroy();
+    this.resultBuffer.destroy();
+    this.readbackBuffer.destroy();
+  }
+}

@@ -17,12 +17,14 @@ import {
   computeDisplacedY,
   HexStateTexture,
   MeshCompute,
+  IslandCompute,
   worldToScreen,
   getEyePosition,
   screenToGround,
   TERRAIN_ORDER,
   OBJECT_FLAGS,
 } from '../../gpu';
+import type { TerrainGridData } from '../../gpu';
 
 // ===================================================================
 // Pre-computed terrain color array for GPU uniform upload (11 × RGBA)
@@ -89,10 +91,16 @@ export const HexGrid: React.FC<HexGridProps> = ({
   const meshRef = useRef<TerrainMesh | null>(null);
   const hexStateRef = useRef<HexStateTexture | null>(null);
   const meshComputeRef = useRef<MeshCompute | null>(null);
+  const islandComputeRef = useRef<IslandCompute | null>(null);
+  const islandTopMeshRef = useRef<TerrainMesh | null>(null);
+  const islandUnderMeshRef = useRef<TerrainMesh | null>(null);
   const seaBufferRef = useRef<GPUBuffer | null>(null);
 
   // Track what mesh was built for (to know when to rebuild)
   const meshConfigRef = useRef<WorldGenConfig | null>(null);
+
+  // Cached terrain grid data for island mesh builder
+  const terrainGridRef = useRef<TerrainGridData | null>(null);
 
   // Track what hex state was built for
   const hexStateSourceRef = useRef<HexData[] | null>(null);
@@ -178,20 +186,12 @@ export const HexGrid: React.FC<HexGridProps> = ({
           stencilRef: 1,
           renderOrder: 1,
         });
-        scene.addObject('islands', {
-          material: terrainMat,
-          mesh,
-          flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_LAYER,
-          stencilRef: 1,
-          renderOrder: 2,
-          visible: false,
-        });
         scene.addObject('sea', {
           material: seaMat,
           mesh: { vertexBuffer: seaBuffer, vertexCount: 6 },
           flags: OBJECT_FLAGS.IS_SEA,
           stencilRef: 0,
-          renderOrder: 3,
+          renderOrder: 4,
         });
 
         sceneRef.current = scene;
@@ -200,17 +200,45 @@ export const HexGrid: React.FC<HexGridProps> = ({
         meshComputeRef.current = mc;
         seaBufferRef.current = seaBuffer;
 
+        // Island compute + meshes
+        const ic = IslandCompute.create(device, hexState.texture, 250000);
+        const islandTopMesh = TerrainMesh.create(device, 60000);
+        const islandUnderMesh = TerrainMesh.create(device, 80000);
+
+        // Register island scene objects (initially hidden)
+        scene.addObject('island-top', {
+          material: terrainMat,
+          mesh: islandTopMesh,
+          flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_LAYER,
+          stencilRef: 1,
+          renderOrder: 2,
+          visible: false,
+        });
+        scene.addObject('island-under', {
+          material: terrainMat,
+          mesh: islandUnderMesh,
+          flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_UNDERSIDE,
+          stencilRef: 1,
+          renderOrder: 3,
+          visible: false,
+        });
+
+        islandComputeRef.current = ic;
+        islandTopMeshRef.current = islandTopMesh;
+        islandUnderMeshRef.current = islandUnderMesh;
+
         // Build initial mesh + hex state
         const cfg = worldConfigRef.current;
-        const buffers = await buildTerrainMesh(mc, cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING);
+        const result = await buildTerrainMesh(mc, cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING);
         if (cancelled) return;
-        mesh.upload(buffers);
+        mesh.upload(result.mesh);
+        terrainGridRef.current = result.grid;
         meshConfigRef.current = cfg;
 
         hexState.update(hexesRef.current);
         hexStateSourceRef.current = hexesRef.current;
 
-        console.log(`Scene graph initialized (${buffers.vertexCount} verts, ${buffers.indexCount / 3} tris)`);
+        console.log(`Scene graph initialized (${result.mesh.vertexCount} verts, ${result.mesh.indexCount / 3} tris)`);
       } catch (err) {
         console.warn('Scene init failed:', err);
       }
@@ -225,8 +253,15 @@ export const HexGrid: React.FC<HexGridProps> = ({
       hexStateRef.current = null;
       meshComputeRef.current?.destroy();
       meshComputeRef.current = null;
+      islandComputeRef.current?.destroy();
+      islandComputeRef.current = null;
+      islandTopMeshRef.current?.destroy();
+      islandTopMeshRef.current = null;
+      islandUnderMeshRef.current?.destroy();
+      islandUnderMeshRef.current = null;
       seaBufferRef.current?.destroy();
       seaBufferRef.current = null;
+      terrainGridRef.current = null;
     };
   }, []);
 
@@ -244,10 +279,11 @@ export const HexGrid: React.FC<HexGridProps> = ({
     const cfg = worldConfig;
     let cancelled = false;
     requestIdleCallback(() => {
-      buildTerrainMesh(mc, cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING).then(buffers => {
+      buildTerrainMesh(mc, cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING).then(result => {
         if (cancelled) return;
-        mesh.upload(buffers);
-        console.log(`Terrain mesh: ${buffers.vertexCount} verts, ${buffers.indexCount / 3} tris`);
+        mesh.upload(result.mesh);
+        terrainGridRef.current = result.grid;
+        console.log(`Terrain mesh: ${result.mesh.vertexCount} verts, ${result.mesh.indexCount / 3} tris`);
       });
     });
     return () => { cancelled = true; };
@@ -266,9 +302,11 @@ export const HexGrid: React.FC<HexGridProps> = ({
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
-    const islands = scene.getObject('islands');
-    if (!islands) return;
-    islands.visible = planarOverlays.some(o => o.type === PlanarAlignment.AIR);
+    const hasAir = planarOverlays.some(o => o.type === PlanarAlignment.AIR);
+    const islandTop = scene.getObject('island-top');
+    const islandUnder = scene.getObject('island-under');
+    if (islandTop) islandTop.visible = hasAir;
+    if (islandUnder) islandUnder.visible = hasAir;
   }, [planarOverlays]);
 
   // --- Focus hex ---

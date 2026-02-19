@@ -73,6 +73,7 @@ export const OBJECT_FLAGS = {
   IS_TERRAIN: 0x01,
   IS_SEA: 0x02,
   IS_ISLAND_LAYER: 0x04,
+  IS_ISLAND_UNDERSIDE: 0x08,
 } as const;
 
 // --- GPU context ---
