@@ -2,38 +2,25 @@
  * Hex state RGBA8 packing codec — single source of truth for encode/decode.
  *
  * Channel layout:
- *   R = packed: lift (high nibble, bits 7-4) + fragmentation (low nibble, bits 3-0)
- *   G = plane type (0-7 stored as direct byte value)
+ *   R = lift (full byte, 256 levels: 0.0-1.0 → 0-255)
+ *   G = packed: plane_type (3 bits high, bits 7-5) + fragmentation (5 bits low, bits 4-0)
  *   B = planar intensity (0.0-1.0 → 0-255)
  *   A = packed: terrain_id (high nibble, bits 7-4) + sector boundary (bit 0)
  *
  * Used by hex-state-texture.ts (encode) and WGSL shaders (decode via render-noise.wgsl.ts).
  */
 
-// --- R channel: lift + fragmentation ---
+// --- R channel: lift (full byte, 256 levels) ---
 
-export interface PackedR {
-  readonly lift: number;          // 0.0-1.0 (4-bit precision, 16 levels)
-  readonly fragmentation: number; // 0.0-1.0 (4-bit precision, 16 levels)
+export function encodeR(lift: number): number {
+  return Math.min(255, Math.round(lift * 255));
 }
 
-export function encodeR(lift: number, fragmentation: number): number {
-  const liftNibble = Math.min(15, Math.round(lift * 15));
-  const fragNibble = Math.min(15, Math.round(fragmentation * 15));
-  return (liftNibble << 4) | fragNibble;
-}
+// --- G channel: plane_type (3 bits high) + fragmentation (5 bits low) ---
 
-export function decodeR(byte: number): PackedR {
-  return {
-    lift: (byte >> 4) / 15,
-    fragmentation: (byte & 0xF) / 15,
-  };
-}
-
-// --- G channel: plane type ---
-
-export function encodeG(planeTypeId: number): number {
-  return planeTypeId;
+export function encodeG(planeTypeId: number, fragmentation: number): number {
+  const fragBits = Math.min(31, Math.round(fragmentation * 31));
+  return (planeTypeId << 5) | fragBits;
 }
 
 // --- B channel: planar intensity ---

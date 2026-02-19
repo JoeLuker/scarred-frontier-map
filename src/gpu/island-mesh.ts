@@ -1,6 +1,7 @@
 import { MESH_VERTEX_STRIDE } from './types';
 import { computeDisplacedY } from './terrain-mesh';
 import type { MeshBuffers, TerrainGridData } from './terrain-mesh';
+import { PLANAR } from '../core/config';
 
 // --- CPU-side value noise for underside rocky texture ---
 // Does NOT need to match any GPU noise — purely cosmetic.
@@ -51,11 +52,12 @@ function displacementCurve(h: number): number {
   return h * h * h;
 }
 
-// Replicate VS Air island-layer smoothing: y = mix(y, median_y, pi² * 0.6)
+// Replicate VS Air ground smoothing: y = mix(y, median_y, pi² * SMOOTH_FACTOR)
+// Must match terrain-renderer.ts VS Air branch exactly.
 function applyAirSmoothing(y: number, heightScale: number, pi: number): number {
   const smoothT = pi * pi;
-  const medianY = displacementCurve(0.35) * heightScale;
-  return y + (medianY - y) * smoothT * 0.6;
+  const medianY = displacementCurve(PLANAR.AIR.SMOOTH_MEDIAN) * heightScale;
+  return y + (medianY - y) * smoothT * PLANAR.AIR.SMOOTH_FACTOR;
 }
 
 /**

@@ -1,57 +1,75 @@
 import { describe, it, expect } from 'vitest';
-import { encodeR, decodeR, encodeG, encodeB, encodeA, decodeA } from '../hex-state-codec';
+import { encodeR, encodeG, encodeB, encodeA, decodeA } from '../hex-state-codec';
 
-describe('R channel (lift + fragmentation)', () => {
-  it('round-trips zero values', () => {
-    const byte = encodeR(0, 0);
-    expect(byte).toBe(0);
-    const decoded = decodeR(byte);
-    expect(decoded.lift).toBe(0);
-    expect(decoded.fragmentation).toBe(0);
+describe('R channel (lift, full byte)', () => {
+  it('encodes 0.0 as 0', () => {
+    expect(encodeR(0)).toBe(0);
   });
 
-  it('round-trips max values', () => {
-    const byte = encodeR(1, 1);
-    expect(byte).toBe(0xFF);
-    const decoded = decodeR(byte);
-    expect(decoded.lift).toBe(1);
-    expect(decoded.fragmentation).toBe(1);
+  it('encodes 1.0 as 255', () => {
+    expect(encodeR(1.0)).toBe(255);
   });
 
-  it('round-trips mid values', () => {
-    const byte = encodeR(0.5, 0.5);
-    const decoded = decodeR(byte);
-    // 4-bit precision: 0.5 * 15 = 7.5 → rounds to 8, 8/15 ≈ 0.533
-    expect(decoded.lift).toBeCloseTo(0.5, 1);
-    expect(decoded.fragmentation).toBeCloseTo(0.5, 1);
+  it('encodes 0.5 as ~128', () => {
+    expect(encodeR(0.5)).toBe(128);
   });
 
-  it('keeps nibbles independent', () => {
-    const byte = encodeR(1, 0);
-    expect(byte).toBe(0xF0);
-    const decoded = decodeR(byte);
-    expect(decoded.lift).toBe(1);
-    expect(decoded.fragmentation).toBe(0);
-
-    const byte2 = encodeR(0, 1);
-    expect(byte2).toBe(0x0F);
-    const decoded2 = decodeR(byte2);
-    expect(decoded2.lift).toBe(0);
-    expect(decoded2.fragmentation).toBe(1);
+  it('clamps above 255', () => {
+    expect(encodeR(2.0)).toBe(255);
   });
 
-  it('clamps values to nibble range', () => {
-    // Values > 1 should be clamped to nibble max (15)
-    const byte = encodeR(2.0, 2.0);
-    expect(byte).toBe(0xFF);
+  it('has 256-level precision', () => {
+    // Every integer 0-255 is reachable
+    const seen = new Set<number>();
+    for (let i = 0; i <= 255; i++) {
+      seen.add(encodeR(i / 255));
+    }
+    expect(seen.size).toBe(256);
   });
 });
 
-describe('G channel (plane type)', () => {
-  it('passes through plane type ID', () => {
+describe('G channel (plane_type + fragmentation)', () => {
+  it('encodes plane type in high 3 bits', () => {
     for (let id = 0; id <= 7; id++) {
-      expect(encodeG(id)).toBe(id);
+      const byte = encodeG(id, 0);
+      expect(byte >> 5).toBe(id);
+      expect(byte & 0x1F).toBe(0);
     }
+  });
+
+  it('encodes fragmentation in low 5 bits', () => {
+    const byte = encodeG(0, 1.0);
+    expect(byte).toBe(31);
+    expect(byte & 0x1F).toBe(31);
+  });
+
+  it('keeps plane type and fragmentation independent', () => {
+    const byte = encodeG(4, 0.5);
+    expect(byte >> 5).toBe(4);
+    // 0.5 * 31 = 15.5 → rounds to 16
+    expect(byte & 0x1F).toBe(16);
+  });
+
+  it('round-trips fragmentation at key values', () => {
+    // 0.0 → 0/31, 0.5 → ~16/31, 1.0 → 31/31
+    expect(encodeG(0, 0) & 0x1F).toBe(0);
+    expect(encodeG(0, 1.0) & 0x1F).toBe(31);
+    const midBits = encodeG(0, 0.5) & 0x1F;
+    expect(midBits / 31).toBeCloseTo(0.5, 1);
+  });
+
+  it('clamps fragmentation to 5-bit max', () => {
+    const byte = encodeG(0, 2.0);
+    expect(byte & 0x1F).toBe(31);
+  });
+
+  it('all plane types 0-7 are distinguishable', () => {
+    const frag = 0.5;
+    const types = new Set<number>();
+    for (let id = 0; id <= 7; id++) {
+      types.add(encodeG(id, frag) >> 5);
+    }
+    expect(types.size).toBe(8);
   });
 });
 

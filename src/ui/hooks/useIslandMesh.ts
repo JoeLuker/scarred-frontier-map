@@ -42,7 +42,7 @@ export function useIslandMesh(
     // Serialize Air overlay state to detect changes
     const key = airOverlays.map(o =>
       `${o.id}:${o.coordinates.q},${o.coordinates.r}:${o.intensity}:${o.radius}:${o.falloff}:${o.fragmentation}:${o.lift}`
-    ).sort().join('|') + `|cfg:${worldConfig.seed}`;
+    ).sort().join('|') + `|cfg:${worldConfig.seed}:${worldConfig.verticality}:${worldConfig.waterLevel}`;
 
     if (key === islandKeyRef.current) {
       islandTop.visible = true;

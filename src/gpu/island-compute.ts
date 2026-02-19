@@ -42,7 +42,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   // Look up hex state at this vertex position
   let hex_qr = pixel_to_hex_qr(pos.x, pos.y, config.hex_size);
   let hex_state = lookup_hex_state(hex_qr, config.grid_radius);
-  let plane_type = u32(round(hex_state.g * 255.0));
+  let packed_g = decode_packed_g(hex_state.g);
+  let plane_type = packed_g.plane_type;
   let planar_intensity = hex_state.b;
 
   // Only Air plane (type 4) creates floating islands
@@ -51,23 +52,22 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     return;
   }
 
-  let packed_r = decode_packed_r(hex_state.r);
-  let frag = packed_r.fragmentation;
-  let lift_param = packed_r.lift;
+  let frag = packed_g.fragmentation;
+  let lift_param = hex_state.r;  // R channel is raw lift (unorm 0-1)
 
   let base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag);
   let detail_freq = base_freq * AIR_DETAIL_FREQ_MUL;
 
   // Chunk noise — same as vertex shader Air branch
   let chunk = fbm3(pos * base_freq) * AIR_CHUNK_BLEND_FBM + value_noise(pos * detail_freq) * AIR_CHUNK_BLEND_DETAIL;
-  let lift_t = saturate((planar_intensity - AIR_LIFT_T_MIN) / AIR_LIFT_T_RANGE);
-  let threshold = mix(AIR_THRESHOLD_HIGH, AIR_THRESHOLD_LOW, lift_t);
+  let edge_onset = saturate(planar_intensity / AIR_EDGE_ONSET);
+  let threshold = mix(AIR_THRESHOLD_HIGH, AIR_COVERAGE_THRESHOLD, edge_onset);
   let is_floating = smoothstep(threshold - AIR_SMOOTHSTEP_WIDTH, threshold + AIR_SMOOTHSTEP_WIDTH, chunk);
 
-  // Per-chunk lift variation: noise frequency below chunk frequency
+  // Per-chunk lift variation: fixed frequency decoupled from fragmentation
   // so each chunk gets a roughly uniform altitude offset.
-  let chunk_alt = value_noise(pos * base_freq * 0.3);
-  let alt_mul = 0.7 + chunk_alt * 0.6; // 0.7x to 1.3x per-chunk
+  let chunk_alt = value_noise(pos * AIR_ALT_VARIATION_FREQ);
+  let alt_mul = 0.8 + chunk_alt * 0.4; // 0.8x to 1.2x per-chunk
 
   // Lift height: slider value directly controls height.
   // 0.15 = max lift as fraction of heightScale.

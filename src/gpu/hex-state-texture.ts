@@ -16,14 +16,12 @@ const PLANE_TYPE_ID: Record<string, number> = {
   [PlanarAlignment.SCAR]:      7,
 };
 
-// Plane type stored as direct byte value (0-7).
-// Shader decodes: plane_type = u32(round(hex_state.g * 255.0))
-
 /**
  * GPU texture encoding per-hex game state:
- *   R = packed: lift (high nibble, bits 7-4) + fragmentation (low nibble, bits 3-0)
- *       Shader decodes: r_byte = round(r * 255), frag = (r_byte & 0xF) / 15, lift = (r_byte >> 4) / 15
- *   G = plane type (0-7 stored as direct byte, decoded via round(g * 255))
+ *   R = lift (full byte, 256 levels: 0.0-1.0 → 0-255)
+ *       Shader reads: hex_state.r as raw unorm 0-1
+ *   G = packed: plane_type (3 bits high, bits 7-5) + fragmentation (5 bits low, bits 4-0)
+ *       Shader decodes: decode_packed_g(hex_state.g) → {plane_type, fragmentation}
  *   B = planar intensity (0.0-1.0 → 0-255)
  *   A = packed: terrain_id (bits 7-4) + sector boundary (bit 0)
  *       Shader decodes: terrain_id = byte >> 4, sector_boundary = byte & 1
@@ -86,13 +84,13 @@ export class HexStateTexture {
 
       const off = (ty * size + tx) * 4;
 
-      // R = packed: lift (high nibble) + fragmentation (low nibble)
-      data[off] = encodeR(hex.planarLift, hex.planarFragmentation);
+      // R = lift (full byte, 256 levels)
+      data[off] = encodeR(hex.planarLift);
 
-      // G = plane type, B = intensity (encode for ALL planar influences)
+      // G = plane_type (3 bits high) + fragmentation (5 bits low), B = intensity
       if (hex.planarInfluences.length > 0) {
         const planeId = PLANE_TYPE_ID[hex.planarAlignment] ?? 0;
-        data[off + 1] = encodeG(planeId);
+        data[off + 1] = encodeG(planeId, hex.planarFragmentation);
         data[off + 2] = encodeB(hex.planarIntensity);
       }
 

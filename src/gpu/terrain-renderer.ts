@@ -111,7 +111,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
   // Zero mesh rebuilds: hex_state_tex updates are a cheap CPU texture write.
   let vt_hex = pixel_to_hex(in.pos_xz.x, in.pos_xz.y, u.hex_size);
   let vt_state = lookup_hex_state(vt_hex.qr, u.grid_radius);
-  let vt_plane = u32(round(vt_state.g * 255.0));
+  let vt_packed_g = decode_packed_g(vt_state.g);
+  let vt_plane = vt_packed_g.plane_type;
   let vt_pi = vt_state.b;
 
   if (vt_plane == 1u) {
@@ -136,15 +137,13 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
   } else if (vt_plane == 4u) {
     // AIR: ground terrain only — island meshes use the early-exit path above.
-    let vt_packed_r = decode_packed_r(vt_state.r);
-    let frag = vt_packed_r.fragmentation;
-    let lift_param = vt_packed_r.lift;
+    let frag = vt_packed_g.fragmentation;
 
     let base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag);
     let detail_freq = base_freq * AIR_DETAIL_FREQ_MUL;
     let chunk = fbm3(in.pos_xz * base_freq) * AIR_CHUNK_BLEND_FBM + value_noise(in.pos_xz * detail_freq) * AIR_CHUNK_BLEND_DETAIL;
-    let lift_t = saturate((vt_pi - AIR_LIFT_T_MIN) / AIR_LIFT_T_RANGE);
-    let threshold = mix(AIR_THRESHOLD_HIGH, AIR_THRESHOLD_LOW, lift_t);
+    let edge_onset = saturate(vt_pi / AIR_EDGE_ONSET);
+    let threshold = mix(AIR_THRESHOLD_HIGH, AIR_COVERAGE_THRESHOLD, edge_onset);
     let is_floating = smoothstep(threshold - AIR_SMOOTHSTEP_WIDTH, threshold + AIR_SMOOTHSTEP_WIDTH, chunk);
 
     // Smoothing scales with intensity² — barely visible at overlay edges,
@@ -155,7 +154,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
     // Terrain ripped away where islands were torn out.
     let gouge_target = -AIR_GOUGE_DEPTH * hs;
-    let gouge_factor = is_floating * lift_param;
+    let gouge_factor = is_floating * vt_pi;
     y = mix(y, gouge_target, gouge_factor);
 
   } else if (vt_plane == 5u) {
@@ -232,7 +231,7 @@ struct PlanarMaterial {
   specular_mod: f32,
 }
 
-fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, sea: f32, packed_r: f32) -> PlanarMaterial {
+fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, sea: f32, frag: f32, lift: f32) -> PlanarMaterial {
   var pm: PlanarMaterial;
   pm.normal_offset = vec3f(0.0);
   pm.replace_color = vec3f(0.5);
@@ -272,7 +271,8 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     pm.replace_strength = pi * 0.85;
 
     // Lava glow in cracks — stronger in valleys where lava pools
-    let crack = smoothstep(0.38, 0.5, value_noise(wn * 0.2));
+    let vor_f = voronoi(wn * 0.2);
+    let crack = 1.0 - smoothstep(0.02, 0.12, vor_f.y - vor_f.x);
     let lava_glow = vec3f(1.5, 0.4, 0.05) * crack * (0.4 + is_low * 0.6);
     // Broad volcanic heat haze
     let heat = vec3f(0.8, 0.25, 0.05) * is_low * 0.3;
@@ -317,8 +317,9 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     // Granite base with crystal vein highlights
     let granite = vec3f(0.45, 0.40, 0.36);
     let crystal = vec3f(0.6, 0.55, 0.45);
-    let strata = value_noise(wn * 0.04);
-    let vein = smoothstep(0.6, 0.7, value_noise(wn * 0.12 + vec2f(3.0, 7.0)));
+    let strata = warped_fbm3(wn * 0.04);
+    let vor_e = voronoi(wn * 0.12 + vec2f(3.0, 7.0));
+    let vein = 1.0 - smoothstep(0.04, 0.15, vor_e.y - vor_e.x);
     let surface = mix(granite, crystal, vein) * (0.7 + strata * 0.6);
     pm.replace_color = surface;
     pm.replace_strength = pi * 0.75;
@@ -334,7 +335,6 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     // ── AIR: Floating islands (dual-layer) ──
     // Ground layer: wind-scoured surfaces + crater marks where islands lifted.
     // Island layer: ethereal sky-stone material with glow.
-    let lift_t = saturate((pi - AIR_LIFT_T_MIN) / AIR_LIFT_T_RANGE);
     let is_island_layer = (obj.flags & 4u) != 0u;
 
     if (is_island_layer) {
@@ -356,19 +356,16 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
       pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
 
-      let fs_packed_r = decode_packed_r(packed_r);
-      let frag = fs_packed_r.fragmentation;
-      let lift_param = fs_packed_r.lift;
-
       // Recompute chunk noise for crater marks (ground layer only)
       let fs_base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag);
       let fs_detail_freq = fs_base_freq * AIR_DETAIL_FREQ_MUL;
       let chunk = fbm3(wn * fs_base_freq) * AIR_CHUNK_BLEND_FBM + value_noise(wn * fs_detail_freq) * AIR_CHUNK_BLEND_DETAIL;
-      let threshold = mix(AIR_THRESHOLD_HIGH, AIR_THRESHOLD_LOW, lift_t);
+      let edge_onset = saturate(pi / AIR_EDGE_ONSET);
+      let threshold = mix(AIR_THRESHOLD_HIGH, AIR_COVERAGE_THRESHOLD, edge_onset);
       let is_floating = smoothstep(threshold - AIR_SMOOTHSTEP_WIDTH, threshold + AIR_SMOOTHSTEP_WIDTH, chunk);
 
       // Crater areas: exposed brown soil/dirt where terrain was ripped out
-      let gouge = is_floating * lift_param;
+      let gouge = is_floating * pi;
       let windswept = vec3f(0.50, 0.46, 0.40);
       let soil = vec3f(0.38, 0.28, 0.16);
       let surface = mix(windswept, soil, gouge);
@@ -431,7 +428,7 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     // Terrain color inverts, geometry is chaotic, emissions flicker.
     let s1 = value_noise(wn * 0.06 + vec2f(42.0, 17.0));
     let s2 = value_noise(wn * 0.15 + vec2f(13.0, 29.0));
-    let s3 = fbm3(wn * 0.04);
+    let s3 = warped_fbm3(wn * 0.04);
     let chaos = (s1 - 0.5) * 2.0;
     pm.normal_offset = vec3f(chaos, s2 - 0.5, (s3 - 0.5) * 2.0) * pi * 0.45;
 
@@ -516,10 +513,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   var is_water = hex_terrain_id == 0u;
 
   // Planar overlay decode — evaluated before material for deep integration
-  let plane_type = u32(round(hex_state.g * 255.0));
+  let fs_packed_g = decode_packed_g(hex_state.g);
+  let plane_type = fs_packed_g.plane_type;
   let p_intensity = hex_state.b;
-  let p_frag = hex_state.r;
-  let pm = get_planar_material(plane_type, p_intensity, in.world_pos, in.elevation, sea, p_frag);
+  let pm = get_planar_material(plane_type, p_intensity, in.world_pos, in.elevation, sea, fs_packed_g.fragmentation, hex_state.r);
 
   // Curvature approximation — must be in uniform control flow (before any
   // non-uniform branching) since dpdx/dpdy require all quad invocations active.
@@ -628,7 +625,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     }
 
     // Multi-frequency noise (visual richness without changing biome identity)
-    let low_noise  = (fbm3(in.world_pos.xz * 0.003) - 0.5) * 0.20;
+    let low_noise  = (warped_fbm3(in.world_pos.xz * 0.003) - 0.5) * 0.20;
     let mid_noise  = (value_noise(in.world_pos.xz * 0.02) - 0.5) * 0.12;
     let high_noise = (value_noise(in.world_pos.xz * 0.12) - 0.5) * 0.06;
     color *= (1.0 + low_noise + mid_noise + high_noise);
@@ -637,7 +634,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     color.b *= (1.0 - low_noise * 0.25);
 
     // Noise-textured rock on cliffs
-    let rock_strata = fbm3(in.world_pos.xz * 0.05);
+    let rock_strata = warped_fbm3(in.world_pos.xz * 0.05);
     let rock_grain = value_noise(in.world_pos.xz * 0.2);
     let textured_rock = ROCK_COLOR * (0.8 + rock_strata * 0.3 + rock_grain * 0.1);
     let rock_blend = clamp(smoothstep(0.2, 0.55, slope) + pm.rock_blend_mod, 0.0, 1.0);
@@ -660,7 +657,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     let snow_base = smoothstep(snow_line, 0.92, norm_elev);
     let snow_slip = 1.0 - smoothstep(0.3, 0.6, slope);
     let snow_fine = value_noise(in.world_pos.xz * 0.15) * 0.12;
-    let snow_coarse = (fbm3(in.world_pos.xz * 0.02) - 0.5) * 0.2;
+    let snow_coarse = (warped_fbm3(in.world_pos.xz * 0.02) - 0.5) * 0.2;
     let snow_t = clamp(snow_base * snow_slip + snow_fine * snow_base + snow_coarse * snow_base, 0.0, 1.0);
     let snow_color = vec3f(0.90, 0.93, 0.97) + vec3f(snow_fine * 0.08);
     color = mix(color, snow_color, snow_t);

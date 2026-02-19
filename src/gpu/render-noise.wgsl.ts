@@ -43,11 +43,11 @@ const AIR_FRAG_EXPONENT: f32 = ${PLANAR.AIR.FRAG_EXPONENT};
 const AIR_DETAIL_FREQ_MUL: f32 = ${PLANAR.AIR.DETAIL_FREQ_MUL};
 const AIR_CHUNK_BLEND_FBM: f32 = ${PLANAR.AIR.CHUNK_BLEND_FBM};
 const AIR_CHUNK_BLEND_DETAIL: f32 = ${PLANAR.AIR.CHUNK_BLEND_DETAIL};
-const AIR_LIFT_T_MIN: f32 = ${PLANAR.AIR.LIFT_T_MIN};
-const AIR_LIFT_T_RANGE: f32 = ${PLANAR.AIR.LIFT_T_RANGE};
+const AIR_COVERAGE_THRESHOLD: f32 = ${PLANAR.AIR.COVERAGE_THRESHOLD};
+const AIR_EDGE_ONSET: f32 = ${PLANAR.AIR.EDGE_ONSET};
 const AIR_THRESHOLD_HIGH: f32 = ${PLANAR.AIR.THRESHOLD_HIGH};
-const AIR_THRESHOLD_LOW: f32 = ${PLANAR.AIR.THRESHOLD_LOW};
 const AIR_SMOOTHSTEP_WIDTH: f32 = ${PLANAR.AIR.SMOOTHSTEP_WIDTH};
+const AIR_ALT_VARIATION_FREQ: f32 = ${PLANAR.AIR.ALT_VARIATION_FREQ};
 const AIR_MAX_LIFT_FRACTION: f32 = ${PLANAR.AIR.MAX_LIFT_FRACTION};
 const AIR_SMOOTH_MEDIAN: f32 = ${PLANAR.AIR.SMOOTH_MEDIAN};
 const AIR_SMOOTH_FACTOR: f32 = ${PLANAR.AIR.SMOOTH_FACTOR};
@@ -64,10 +64,22 @@ const SCAR_DISPLACEMENT_AMP: f32 = ${PLANAR.SCAR.DISPLACEMENT_AMP};
 
 // ── Hash / noise ────────────────────────────────────────────
 
+// PCG hash — O'Neill (2014). Strong mixing with no lattice correlation.
+fn pcg(n: u32) -> u32 {
+  var h = n * 747796405u + 2891336453u;
+  h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+  return (h >> 22u) ^ h;
+}
+
 fn hash2(p: vec2f) -> f32 {
-  var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
+  let n = pcg(bitcast<u32>(p.x) ^ pcg(bitcast<u32>(p.y)));
+  return f32(n) / 4294967295.0;
+}
+
+fn hash2v(p: vec2f) -> vec2f {
+  let n1 = pcg(bitcast<u32>(p.x) ^ pcg(bitcast<u32>(p.y)));
+  let n2 = pcg(n1);
+  return vec2f(f32(n1), f32(n2)) / 4294967295.0;
 }
 
 // Gradient noise (Perlin-style): dot-product of pseudo-random gradient vectors
@@ -109,6 +121,39 @@ fn fbm3(p: vec2f) -> f32 {
     amp *= 0.5;
   }
   return val;
+}
+
+// Domain-warped fBM: f(p + fbm(p)) for organic, non-repeating patterns.
+fn warped_fbm3(p: vec2f) -> f32 {
+  let warp = vec2f(
+    fbm3(p * 0.7 + vec2f(1.7, 9.2)),
+    fbm3(p * 0.7 + vec2f(8.3, 2.8))
+  );
+  return fbm3(p + warp * 0.8);
+}
+
+// Voronoi: vec2f(F1, F2) — distance to nearest / second-nearest cell.
+// F1 = cellular pattern, F2-F1 = edge/vein pattern.
+fn voronoi(p: vec2f) -> vec2f {
+  let ip = floor(p);
+  let fp = fract(p);
+  var d1 = 8.0;
+  var d2 = 8.0;
+  for (var j: i32 = -1; j <= 1; j++) {
+    for (var k: i32 = -1; k <= 1; k++) {
+      let b = vec2f(f32(k), f32(j));
+      let cell_pt = hash2v(ip + b);
+      let diff = b + cell_pt - fp;
+      let d = dot(diff, diff);
+      if (d < d1) {
+        d2 = d1;
+        d1 = d;
+      } else if (d < d2) {
+        d2 = d;
+      }
+    }
+  }
+  return vec2f(sqrt(d1), sqrt(d2));
 }
 
 // ── Hex coordinate conversion (pointy-top) ─────────────────
@@ -178,17 +223,14 @@ fn lookup_hex_state(hex_qr: vec2f, grid_radius: f32) -> vec4f {
 
 // ── Packed channel decode ───────────────────────────────────
 
-struct PackedR {
-  lift: f32,          // high nibble: 0.0-1.0
-  fragmentation: f32, // low nibble: 0.0-1.0
+struct PackedG {
+  plane_type: u32,
+  fragmentation: f32,
 }
 
-fn decode_packed_r(r_value: f32) -> PackedR {
-  let r_byte = u32(round(r_value * 255.0));
-  return PackedR(
-    f32(r_byte >> 4u) / 15.0,
-    f32(r_byte & 0xFu) / 15.0,
-  );
+fn decode_packed_g(g_value: f32) -> PackedG {
+  let g_byte = u32(round(g_value * 255.0));
+  return PackedG(g_byte >> 5u, f32(g_byte & 0x1Fu) / 31.0);
 }
 
 struct PackedA {
