@@ -26,7 +26,7 @@ export const useCamera = (
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const k = e.key.toLowerCase();
-      if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
+      if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
         keysDown.current.add(k);
       }
     };
@@ -141,6 +141,11 @@ export const useCamera = (
 
     cam.targetX += dx * speed;
     cam.targetZ += dz * speed;
+
+    // Q/E orbit rotation
+    const rotSpeed = 0.03;
+    if (keys.has('q')) { cam.azimuth += rotSpeed; }
+    if (keys.has('e')) { cam.azimuth -= rotSpeed; }
   }, []);
 
   /** Compute the current view-projection matrix for the given aspect ratio. */
