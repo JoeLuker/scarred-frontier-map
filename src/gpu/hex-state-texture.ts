@@ -2,6 +2,7 @@ import { HexData, PlanarAlignment } from '../core/types';
 import { getSectorID } from '../core/geometry';
 import { WORLD } from '../core/config';
 import { TERRAIN_TYPE_TO_ID } from './types';
+import { encodeR, encodeG, encodeB, encodeA } from './hex-state-codec';
 
 // Plane type → integer ID (0-7)
 const PLANE_TYPE_ID: Record<string, number> = {
@@ -86,31 +87,29 @@ export class HexStateTexture {
       const off = (ty * size + tx) * 4;
 
       // R = packed: lift (high nibble) + fragmentation (low nibble)
-      const fragNibble = Math.min(15, Math.round(hex.planarFragmentation * 15));
-      const liftNibble = Math.min(15, Math.round(hex.planarLift * 15));
-      data[off] = (liftNibble << 4) | fragNibble;
+      data[off] = encodeR(hex.planarLift, hex.planarFragmentation);
 
       // G = plane type, B = intensity (encode for ALL planar influences)
       if (hex.planarInfluences.length > 0) {
         const planeId = PLANE_TYPE_ID[hex.planarAlignment] ?? 0;
-        data[off + 1] = planeId;
-        data[off + 2] = Math.min(255, Math.round(hex.planarIntensity * 255));
+        data[off + 1] = encodeG(planeId);
+        data[off + 2] = encodeB(hex.planarIntensity);
       }
 
       // A = packed: terrain_id (high nibble) + sector boundary (bit 0)
       // Use current terrain (includes planar mutations like Forest→Magma).
       // IDs 0-7 are base types, 8-10 are mutation-only (Magma, Crystal, Floating).
       const terrainId = TERRAIN_TYPE_TO_ID[hex.terrain] ?? 0;
-      let sectorBoundary = 0;
+      let isBoundary = false;
       const sector = getSectorID(q, r, sectorSpacing);
       for (const [dq, dr] of NEIGHBORS) {
         const ns = getSectorID(q + dq, r + dr, sectorSpacing);
         if (ns.q !== sector.q || ns.r !== sector.r) {
-          sectorBoundary = 1;
+          isBoundary = true;
           break;
         }
       }
-      data[off + 3] = terrainId * 16 + sectorBoundary;
+      data[off + 3] = encodeA(terrainId, isBoundary);
     }
 
     this.device.queue.writeTexture(

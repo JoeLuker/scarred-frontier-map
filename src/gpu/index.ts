@@ -11,6 +11,8 @@ export { buildIslandMesh } from './island-mesh';
 export type { IslandMeshResult, IslandRenderParams } from './island-mesh';
 export { getViewProjection, screenToGround, worldToScreen, getEyePosition } from './camera';
 export type { OrbitalCamera } from './camera';
+export { encodeR, decodeR, encodeG, encodeB, encodeA, decodeA } from './hex-state-codec';
+export type { PackedR, PackedA } from './hex-state-codec';
 export { TERRAIN_ORDER, OBJECT_FLAGS } from './types';
 export type { GpuContext } from './types';
 export type { SceneMesh, Material, SceneObject } from './scene';
