@@ -201,6 +201,14 @@ export function buildIslandMesh(
     depth[i] = md > 0 ? distField[i]! / md : 0;
   }
 
+  // Per-component thickness scale: depth cannot exceed the island's width.
+  // maxDist is in grid cells; world-space width ≈ 2 * maxDist * spacing.
+  const maxUncappedDepth = (BASE_THICKNESS + STALACTITE_AMP) * heightScale;
+  const compThicknessScale = maxDist.map(md => {
+    const worldWidth = 2 * md * spacing;
+    return maxUncappedDepth > 0 ? Math.min(1, worldWidth / maxUncappedDepth) : 1;
+  });
+
   // --- Step 3: Build vertex + index arrays ---
   const gridToTop = new Int32Array(totalVerts);
   gridToTop.fill(-1);
@@ -238,13 +246,17 @@ export function buildIslandMesh(
     // depth^1.5 gives steeper taper at edges, wider plateau in center.
     const d = depth[i]!;
     const envelope = d * Math.sqrt(d); // d^1.5
-    const baseThick = BASE_THICKNESS * envelope * heightScale;
+
+    // Per-component scale: cap depth so island can't be taller than it is wide
+    const comp = componentOf[i]!;
+    const tScale = comp >= 0 ? compThicknessScale[comp]! : 1;
+    const baseThick = BASE_THICKNESS * envelope * heightScale * tScale;
 
     // Stalactite protrusions — modulated by envelope so they only
     // appear in the interior, not at thin edges.
     const x = positions[i * 2]!;
     const z = positions[i * 2 + 1]!;
-    const stalactite = stalactiteNoise(x, z) * STALACTITE_AMP * envelope * heightScale;
+    const stalactite = stalactiteNoise(x, z) * STALACTITE_AMP * envelope * heightScale * tScale;
 
     const bottomY = topY - baseThick - stalactite;
     bottomYGrid[i] = bottomY;
