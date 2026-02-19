@@ -114,27 +114,27 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
   } else if (vt_plane == 4u) {
     // AIR: dual-layer rendering via obj.flags.
-    // Both layers: smooth + depress ground base.
-    // Island layer: additionally lifts floating chunks; fragment shader discards the rest.
+    // Both layers: smooth ground base. Island layer lifts uniformly;
+    // fragment shader discards non-floating fragments.
     let chunk = fbm3(in.pos_xz * 0.008) * 0.7 + value_noise(in.pos_xz * 0.03) * 0.3;
     let lift_t = saturate((vt_pi - 0.3) / 0.5);
     let threshold = mix(0.75, 0.15, lift_t);
-    let is_floating = smoothstep(threshold - 0.05, threshold + 0.05, chunk);
+    let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
 
     let is_island_layer = (obj.flags & 4u) != 0u;
 
-    // Both layers share the same ground base (smooth + depress)
+    // Both layers: smooth terrain toward median
     let median_y = displacement_curve(0.35) * hs;
     let smooth_t = saturate(vt_pi / 0.4);
     y = mix(y, median_y, smooth_t * 0.3);
-    y -= is_floating * lift_t * 0.04 * hs;
 
     if (is_island_layer) {
-      // Island layer: lift floating chunks above ground base.
-      // Non-floating vertices stay at ground level — fragment shader discards them.
-      let variation = 0.6 + value_noise(in.pos_xz * 0.015 + vec2f(42.0, 13.0)) * 0.8;
-      y += mix(0.08, 0.25, lift_t) * hs * is_floating * variation;
-      y += value_noise(in.pos_xz * 0.025) * vt_pi * 0.003 * hs * is_floating;
+      // Uniform lift — fragment discard defines island boundaries
+      let lift = mix(0.005, 0.015, lift_t) * hs;
+      y += lift;
+    } else {
+      // Ground: depress where islands lifted from
+      y -= is_floating * lift_t * 0.003 * hs;
     }
 
   } else if (vt_plane == 5u) {
@@ -610,12 +610,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let is_beyond_grid = hex_dist > u.grid_radius;
 
   // Island layer: discard non-floating fragments (after derivatives are safe).
-  // Chunk noise must match vertex shader exactly for consistent edges.
+  // Smoothstep band (±0.1) must match vertex shader for consistent edges.
   if (plane_type == 4u && (obj.flags & 4u) != 0u) {
     let lift_t_d = saturate((p_intensity - 0.3) / 0.5);
     let chunk_d = fbm3(in.world_pos.xz * 0.008) * 0.7 + value_noise(in.world_pos.xz * 0.03) * 0.3;
     let threshold_d = mix(0.75, 0.15, lift_t_d);
-    let floating_d = smoothstep(threshold_d - 0.05, threshold_d + 0.05, chunk_d);
+    let floating_d = smoothstep(threshold_d - 0.1, threshold_d + 0.1, chunk_d);
     if (floating_d < 0.1) { discard; }
   }
 
