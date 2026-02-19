@@ -176,7 +176,9 @@ export function buildIslandMesh(
     const x = positions[i * 2]!;
     const z = positions[i * 2 + 1]!;
     if (x * x + z * z > cullRadius2) continue;
-    if (classifyData[i * 4]! > 0.7) {
+    const isFloating = classifyData[i * 4]!;
+    const liftH = classifyData[i * 4 + 1]!;
+    if (isFloating > 0.7 && liftH > 0.001 * params.heightScale) {
       isIsland[i] = 1;
       islandCount++;
     }
