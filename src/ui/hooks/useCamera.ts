@@ -144,8 +144,8 @@ export const useCamera = (
 
     // Q/E orbit rotation
     const rotSpeed = 0.03;
-    if (keys.has('q')) { cam.azimuth += rotSpeed; }
-    if (keys.has('e')) { cam.azimuth -= rotSpeed; }
+    if (keys.has('q')) { cam.azimuth -= rotSpeed; }
+    if (keys.has('e')) { cam.azimuth += rotSpeed; }
   }, []);
 
   /** Compute the current view-projection matrix for the given aspect ratio. */
