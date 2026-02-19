@@ -419,22 +419,17 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     pm.specular_mod = mix(1.0, 0.4, pi);
 
   } else if (plane_type == 4u) {
-    // ── AIR: Wind erosion + floating islands (dual-layer) ──
+    // ── AIR: Floating islands (dual-layer) ──
     // Ground layer: wind-scoured surfaces + crater marks where islands lifted.
     // Island layer: ethereal sky-stone material with glow.
-    let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
-    pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
-
-    // Recompute chunk noise (must match vertex shader exactly)
     let lift_t = saturate((pi - 0.3) / 0.5);
-    let chunk = fbm3(wn * 0.008) * 0.7 + value_noise(wn * 0.03) * 0.3;
-    let threshold = mix(0.75, 0.15, lift_t);
-    let is_floating = smoothstep(threshold - 0.05, threshold + 0.05, chunk);
-
     let is_island_layer = (obj.flags & 4u) != 0u;
 
     if (is_island_layer) {
-      // Island layer: ethereal sky-stone — light, crystalline, glowing
+      // Island layer: smooth crystalline normals, ethereal sky-stone
+      let cn = value_noise(wn * 0.02 + vec2f(5.0, 11.0)) - 0.5;
+      pm.normal_offset = vec3f(cn * 0.1, 0.15, cn * 0.08) * pi;
+
       let sky_stone = vec3f(0.78, 0.86, 0.96);
       let crystal = vec3f(0.65, 0.75, 0.92);
       let surface = mix(sky_stone, crystal, is_high);
@@ -447,7 +442,15 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       pm.shadow_mod = mix(1.0, 0.35, pi);
       pm.specular_mod = 1.0 + 0.8 * pi;
     } else {
-      // Ground layer: wind-scoured + crater dust where islands lifted from
+      // Ground layer: wind-scoured normals + crater dust where islands lifted
+      let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
+      pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
+
+      // Recompute chunk noise (must match vertex shader exactly)
+      let chunk = fbm3(wn * 0.008) * 0.7 + value_noise(wn * 0.03) * 0.3;
+      let threshold = mix(0.75, 0.15, lift_t);
+      let is_floating = smoothstep(threshold - 0.05, threshold + 0.05, chunk);
+
       let dust = vec3f(0.72, 0.68, 0.58);
       let cloud_white = vec3f(0.88, 0.90, 0.95);
       let base_surface = mix(dust, cloud_white, is_high);
