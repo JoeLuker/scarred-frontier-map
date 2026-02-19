@@ -1,32 +1,21 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { HexData, PlanarAlignment, PlanarOverlay, WorldGenConfig, TerrainType } from '../../core/types';
+import { HexData, PlanarOverlay, WorldGenConfig } from '../../core/types';
 import { WORLD, TERRAIN, CAMERA, MESH, getTerrainRenderParams } from '../../core/config';
 import { TERRAIN_COLORS, PLANAR_COLORS } from '../theme';
 import { hexToPixel, pixelToHex } from '../../core/geometry';
 import { hexToRgb } from './renderUtils';
 import { useCamera } from '../hooks/useCamera';
+import { useGpuResources } from '../hooks/useGpuResources';
+import { useTerrainMesh } from '../hooks/useTerrainMesh';
+import { useHexStateSync } from '../hooks/useHexStateSync';
+import { useIslandMesh } from '../hooks/useIslandMesh';
 import {
-  initWebGPU,
-  Scene,
-  createTerrainShader,
-  createTerrainMaterial,
-  createIslandMaterial,
-  createSeaMaterial,
-  createSkyMaterial,
-  TerrainMesh,
-  buildTerrainMesh,
-  buildIslandMesh,
   computeDisplacedY,
-  HexStateTexture,
-  MeshCompute,
-  IslandCompute,
   worldToScreen,
   getEyePosition,
   screenToGround,
   TERRAIN_ORDER,
-  OBJECT_FLAGS,
 } from '../../gpu';
-import type { TerrainGridData } from '../../gpu';
 
 // ===================================================================
 // Pre-computed terrain color array for GPU uniform upload (11 × RGBA)
@@ -88,28 +77,6 @@ export const HexGrid: React.FC<HexGridProps> = ({
   const showGridRef = useRef(showGrid);
   const draggingOverlayIdRef = useRef<string | null>(null);
 
-  // GPU resources
-  const sceneRef = useRef<Scene | null>(null);
-  const meshRef = useRef<TerrainMesh | null>(null);
-  const hexStateRef = useRef<HexStateTexture | null>(null);
-  const meshComputeRef = useRef<MeshCompute | null>(null);
-  const islandComputeRef = useRef<IslandCompute | null>(null);
-  const islandTopMeshRef = useRef<TerrainMesh | null>(null);
-  const islandUnderMeshRef = useRef<TerrainMesh | null>(null);
-  const seaBufferRef = useRef<GPUBuffer | null>(null);
-
-  // Track what mesh was built for (to know when to rebuild)
-  const meshConfigRef = useRef<WorldGenConfig | null>(null);
-
-  // Cached terrain grid data for island mesh builder
-  const terrainGridRef = useRef<TerrainGridData | null>(null);
-
-  // Track what hex state was built for
-  const hexStateSourceRef = useRef<HexData[] | null>(null);
-
-  // Island mesh rebuild key — serialized Air overlay state
-  const islandKeyRef = useRef('');
-
   // O(1) hex coordinate → array index lookup
   const hexLookupRef = useRef<Map<string, number>>(new Map());
   const hoveredHexIndexRef = useRef(-1);
@@ -129,6 +96,21 @@ export const HexGrid: React.FC<HexGridProps> = ({
     tickKeys,
   } = useCamera(canvasRef, containerRef);
 
+  // --- GPU resource lifecycle ---
+  const gpu = useGpuResources(gpuCanvasRef, hexesRef, worldConfigRef);
+
+  // --- Terrain mesh rebuild on config change ---
+  useTerrainMesh(worldConfig, gpu.mesh, gpu.meshCompute, gpu.terrainGrid, gpu.meshConfig);
+
+  // --- Hex state texture sync ---
+  useHexStateSync(hexes, gpu.hexState, gpu.hexStateSource);
+
+  // --- Island mesh rebuild on Air overlay changes ---
+  useIslandMesh(
+    planarOverlays, worldConfig, hexes,
+    gpu.scene, gpu.islandCompute, gpu.islandTopMesh, gpu.islandUnderMesh, gpu.terrainGrid,
+  );
+
   // --- Sync refs + rebuild lookup map when hexes change ---
   useEffect(() => {
     hexesRef.current = hexes;
@@ -144,234 +126,6 @@ export const HexGrid: React.FC<HexGridProps> = ({
   useEffect(() => { worldConfigRef.current = worldConfig; }, [worldConfig]);
   useEffect(() => { showGizmosRef.current = showGizmos; }, [showGizmos]);
   useEffect(() => { showGridRef.current = showGrid; }, [showGrid]);
-
-  // --- GPU Init ---
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const ctx = await initWebGPU();
-      if (cancelled || !ctx || !gpuCanvasRef.current) return;
-      try {
-        const { device } = ctx;
-        const scene = Scene.create(device, gpuCanvasRef.current);
-        const mesh = TerrainMesh.create(device, 250000);
-        const hexState = HexStateTexture.create(device, WORLD.GRID_RADIUS);
-        const mc = MeshCompute.create(device, 250000);
-
-        // Create shader + materials
-        const shader = device.createShaderModule({ code: createTerrainShader() });
-        const terrainMat = createTerrainMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
-        const islandMat = createIslandMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
-        const seaMat = createSeaMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
-        const skyMat = createSkyMaterial(device, shader, scene.format, scene.group0Layout);
-
-        // Sea quad vertex buffer (7 floats/vert: pos_xz, elevation, moisture, normal)
-        const SEA_EXTENT = 100000;
-        const seaVerts = new Float32Array([
-          -SEA_EXTENT, -SEA_EXTENT, 0, 0, 0, 1, 0,
-           SEA_EXTENT, -SEA_EXTENT, 0, 0, 0, 1, 0,
-          -SEA_EXTENT,  SEA_EXTENT, 0, 0, 0, 1, 0,
-          -SEA_EXTENT,  SEA_EXTENT, 0, 0, 0, 1, 0,
-           SEA_EXTENT, -SEA_EXTENT, 0, 0, 0, 1, 0,
-           SEA_EXTENT,  SEA_EXTENT, 0, 0, 0, 1, 0,
-        ]);
-        const seaBuffer = device.createBuffer({
-          size: seaVerts.byteLength,
-          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-        });
-        device.queue.writeBuffer(seaBuffer, 0, seaVerts);
-
-        // Set hex state texture (stable reference — data updates via writeTexture)
-        scene.setHexStateTexture(hexState.texture);
-
-        // Register scene objects
-        scene.addObject('sky', { material: skyMat, drawCount: 3, renderOrder: 0 });
-        scene.addObject('terrain', {
-          material: terrainMat,
-          mesh,
-          flags: OBJECT_FLAGS.IS_TERRAIN,
-          stencilRef: 1,
-          renderOrder: 1,
-        });
-        scene.addObject('sea', {
-          material: seaMat,
-          mesh: { vertexBuffer: seaBuffer, vertexCount: 6 },
-          flags: OBJECT_FLAGS.IS_SEA,
-          stencilRef: 0,
-          renderOrder: 4,
-        });
-
-        sceneRef.current = scene;
-        meshRef.current = mesh;
-        hexStateRef.current = hexState;
-        meshComputeRef.current = mc;
-        seaBufferRef.current = seaBuffer;
-
-        // Island compute + meshes
-        const ic = IslandCompute.create(device, hexState.texture, 250000);
-        const islandTopMesh = TerrainMesh.create(device, 60000);
-        const islandUnderMesh = TerrainMesh.create(device, 80000);
-
-        // Register island scene objects (initially hidden)
-        scene.addObject('island-top', {
-          material: islandMat,
-          mesh: islandTopMesh,
-          flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_LAYER,
-          stencilRef: 1,
-          renderOrder: 2,
-          visible: false,
-        });
-        scene.addObject('island-under', {
-          material: islandMat,
-          mesh: islandUnderMesh,
-          flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_UNDERSIDE,
-          stencilRef: 1,
-          renderOrder: 3,
-          visible: false,
-        });
-
-        islandComputeRef.current = ic;
-        islandTopMeshRef.current = islandTopMesh;
-        islandUnderMeshRef.current = islandUnderMesh;
-
-        // Build initial mesh + hex state
-        const cfg = worldConfigRef.current;
-        const result = await buildTerrainMesh(mc, cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING);
-        if (cancelled) return;
-        mesh.upload(result.mesh);
-        terrainGridRef.current = result.grid;
-        meshConfigRef.current = cfg;
-
-        hexState.update(hexesRef.current);
-        hexStateSourceRef.current = hexesRef.current;
-
-        console.log(`Scene graph initialized (${result.mesh.vertexCount} verts, ${result.mesh.indexCount / 3} tris)`);
-      } catch (err) {
-        console.warn('Scene init failed:', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      sceneRef.current?.destroy();
-      sceneRef.current = null;
-      meshRef.current?.destroy();
-      meshRef.current = null;
-      hexStateRef.current?.destroy();
-      hexStateRef.current = null;
-      meshComputeRef.current?.destroy();
-      meshComputeRef.current = null;
-      islandComputeRef.current?.destroy();
-      islandComputeRef.current = null;
-      islandTopMeshRef.current?.destroy();
-      islandTopMeshRef.current = null;
-      islandUnderMeshRef.current?.destroy();
-      islandUnderMeshRef.current = null;
-      seaBufferRef.current?.destroy();
-      seaBufferRef.current = null;
-      terrainGridRef.current = null;
-    };
-  }, []);
-
-  // --- Rebuild terrain mesh when world config changes ---
-  useEffect(() => {
-    const mesh = meshRef.current;
-    const mc = meshComputeRef.current;
-    if (!mesh || !mc) return;
-
-    // Skip if config hasn't changed (same reference = same config)
-    if (meshConfigRef.current === worldConfig) return;
-    meshConfigRef.current = worldConfig;
-
-    // Build mesh asynchronously (GPU compute for elevation+moisture)
-    const cfg = worldConfig;
-    let cancelled = false;
-    requestIdleCallback(() => {
-      buildTerrainMesh(mc, cfg, WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING).then(result => {
-        if (cancelled) return;
-        mesh.upload(result.mesh);
-        terrainGridRef.current = result.grid;
-        console.log(`Terrain mesh: ${result.mesh.vertexCount} verts, ${result.mesh.indexCount / 3} tris`);
-      });
-    });
-    return () => { cancelled = true; };
-  }, [worldConfig]);
-
-  // --- Update hex state texture when hex data changes ---
-  useEffect(() => {
-    const hexState = hexStateRef.current;
-    if (!hexState) return;
-    if (hexStateSourceRef.current === hexes) return;
-    hexStateSourceRef.current = hexes;
-    hexState.update(hexes);
-  }, [hexes]);
-
-  // --- Rebuild island meshes when Air overlays or terrain change ---
-  useEffect(() => {
-    const scene = sceneRef.current;
-    const ic = islandComputeRef.current;
-    const topMesh = islandTopMeshRef.current;
-    const underMesh = islandUnderMeshRef.current;
-    const grid = terrainGridRef.current;
-    if (!scene || !ic || !topMesh || !underMesh) return;
-
-    const islandTop = scene.getObject('island-top');
-    const islandUnder = scene.getObject('island-under');
-    if (!islandTop || !islandUnder) return;
-
-    // Check if Air overlays are present
-    const airOverlays = planarOverlays.filter(o => o.type === PlanarAlignment.AIR);
-    const hasAir = airOverlays.length > 0;
-
-    if (!hasAir || !grid) {
-      islandTop.visible = false;
-      islandUnder.visible = false;
-      islandKeyRef.current = '';
-      return;
-    }
-
-    // Serialize Air overlay state to detect changes
-    const key = airOverlays.map(o =>
-      `${o.id}:${o.coordinates.q},${o.coordinates.r}:${o.intensity}:${o.radius}:${o.falloff}:${o.fragmentation}:${o.lift}`
-    ).sort().join('|') + `|cfg:${worldConfig.seed}`;
-
-    if (key === islandKeyRef.current) {
-      islandTop.visible = true;
-      islandUnder.visible = true;
-      return;
-    }
-    islandKeyRef.current = key;
-
-    const cfg = worldConfig;
-    const { seaLevel, landRange, heightScale } = getTerrainRenderParams(cfg);
-    let cancelled = false;
-
-    requestIdleCallback(() => {
-      if (cancelled) return;
-      ic.classify(
-        grid.positions,
-        grid.cols * grid.rows,
-        WORLD.HEX_SIZE,
-        WORLD.GRID_RADIUS,
-        heightScale,
-        seaLevel,
-      ).then(classifyData => {
-        if (cancelled) return;
-        const result = buildIslandMesh(classifyData, grid, { seaLevel, landRange, heightScale });
-        if (!result) {
-          islandTop.visible = false;
-          islandUnder.visible = false;
-          return;
-        }
-        topMesh.upload(result.top);
-        underMesh.upload(result.underside);
-        islandTop.visible = true;
-        islandUnder.visible = true;
-        console.log(`Island mesh: top ${result.top.vertexCount}v/${result.top.indexCount / 3}t, under ${result.underside.vertexCount}v/${result.underside.indexCount / 3}t`);
-      });
-    });
-
-    return () => { cancelled = true; };
-  }, [planarOverlays, worldConfig, hexes]);
 
   // --- Focus hex ---
   useEffect(() => {
@@ -512,7 +266,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
   // ===================================================================
 
   const renderGpu = useCallback(() => {
-    const scene = sceneRef.current;
+    const scene = gpu.scene.current;
     const canvas = canvasRef.current;
     const gpuCanvas = gpuCanvasRef.current;
     const container = containerRef.current;
@@ -647,7 +401,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
         ctx.fillText(overlay.type.substring(9, 11).toUpperCase(), screen.x, screen.y);
       });
     }
-  }, [computeViewProjection, camera, tickKeys]);
+  }, [computeViewProjection, camera, tickKeys, gpu.scene]);
 
   // ===================================================================
   // Render Loop
@@ -655,7 +409,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
   useEffect(() => {
     const loop = () => {
-      if (sceneRef.current) {
+      if (gpu.scene.current) {
         renderGpu();
       }
       animationRef.current = requestAnimationFrame(loop);
