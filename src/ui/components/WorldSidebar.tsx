@@ -242,6 +242,40 @@ export const WorldSidebar: React.FC<WorldSidebarProps> = ({
                           onPointerUp={() => onCommitOverlay()}
                           className="w-full h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
                         />
+                        {overlay.type === PlanarAlignment.AIR && (
+                          <>
+                            <div className="flex justify-between text-[9px] text-slate-500 uppercase font-bold">
+                              <span>Islands</span>
+                              <span className="flex gap-1.5 items-center">
+                                <span className="text-slate-600 font-normal normal-case">{overlay.fragmentation <= 0.3 ? 'huge' : overlay.fragmentation <= 0.7 ? 'mixed' : 'tiny'}</span>
+                                {Math.round(overlay.fragmentation * 100)}%
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0" max="1" step="0.01"
+                              value={overlay.fragmentation}
+                              onChange={(e) => onModifyOverlay({ ...overlay, fragmentation: parseFloat(e.target.value) })}
+                              onPointerUp={() => onCommitOverlay()}
+                              className="w-full h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
+                            />
+                            <div className="flex justify-between text-[9px] text-slate-500 uppercase font-bold">
+                              <span>Lift</span>
+                              <span className="flex gap-1.5 items-center">
+                                <span className="text-slate-600 font-normal normal-case">{overlay.lift <= 0.3 ? 'low' : overlay.lift <= 0.7 ? 'mid' : 'high'}</span>
+                                {Math.round(overlay.lift * 100)}%
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0" max="1" step="0.01"
+                              value={overlay.lift}
+                              onChange={(e) => onModifyOverlay({ ...overlay, lift: parseFloat(e.target.value) })}
+                              onPointerUp={() => onCommitOverlay()}
+                              className="w-full h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-slate-400"
+                            />
+                          </>
+                        )}
                         <div className="flex items-center gap-1 text-[9px] text-slate-600">
                           <Move size={8} />
                           <span>({Math.round(overlay.coordinates.q)}, {Math.round(overlay.coordinates.r)}) — drag on map</span>

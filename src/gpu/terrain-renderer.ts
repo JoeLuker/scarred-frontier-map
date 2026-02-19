@@ -168,8 +168,11 @@ fn vs_main(in: VertexIn) -> VertexOut {
       let lift = mix(0.005, 0.08, lift_param) * lift_t * hs * alt_mul;
       y += lift;
     } else {
-      // Ground: visible depression where islands lifted from
-      y -= is_floating * lift_t * mix(0.003, 0.02, lift_param) * hs;
+      // Ground: terrain ripped away where islands were torn out.
+      // Pulls terrain toward below-sea-level, creating visible craters.
+      let gouge_target = -0.008 * hs;
+      let gouge_factor = is_floating * lift_t * mix(0.4, 0.9, lift_param);
+      y = mix(y, gouge_target, gouge_factor);
     }
 
   } else if (vt_plane == 5u) {
@@ -486,16 +489,18 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       let threshold = mix(0.75, 0.15, lift_t);
       let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
 
-      let worn = vec3f(0.58, 0.55, 0.50);
-      let crater = vec3f(0.48, 0.44, 0.38);
-      let surface = mix(worn, crater, is_floating * lift_t * 0.5);
+      // Crater areas: exposed rock/dirt where terrain was ripped out
+      let gouge = is_floating * lift_t;
+      let worn = vec3f(0.52, 0.48, 0.42);
+      let exposed_rock = vec3f(0.30, 0.26, 0.22);
+      let surface = mix(worn, exposed_rock, gouge);
       pm.replace_color = surface;
-      pm.replace_strength = pi * 0.3;
-      pm.roughness_mod = mix(0.0, 0.15, is_floating * lift_t) * pi;
-      pm.snow_line_shift = -0.1 * pi;
-      pm.ambient_mod = 1.0 + 0.15 * pi;
-      pm.shadow_mod = mix(1.0, 0.8, pi);
-      pm.specular_mod = 1.0 + 0.15 * pi;
+      pm.replace_strength = mix(pi * 0.2, 0.85, gouge);
+      pm.roughness_mod = mix(0.0, 0.4, gouge) * pi;
+      pm.snow_line_shift = mix(-0.1, 0.5, gouge) * pi;
+      pm.ambient_mod = mix(1.0 + 0.15 * pi, 0.7, gouge);
+      pm.shadow_mod = mix(1.0, 0.5, gouge);
+      pm.specular_mod = mix(1.0 + 0.15 * pi, 0.3, gouge);
     }
 
   } else if (plane_type == 5u) {
