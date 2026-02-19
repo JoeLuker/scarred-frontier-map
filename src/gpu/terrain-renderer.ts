@@ -160,12 +160,12 @@ fn vs_main(in: VertexIn) -> VertexOut {
     if (is_island_layer) {
       // Pass floating mask to fragment for discard (avoids expensive noise recompute)
       island_mask = is_floating;
-      // Per-chunk altitude variation — wider range at higher lift for dramatic separation
-      let chunk_alt = value_noise(in.pos_xz * 0.01);
-      let variation = 0.2 + lift_param * 0.6;
-      let alt_mul = (1.0 - variation) + chunk_alt * variation * 2.0;
-      // Lift height scales with lift slider
-      let lift = mix(0.005, 0.08, lift_param) * lift_t * hs * alt_mul;
+      // Per-chunk altitude variation: noise frequency below chunk frequency
+      // so each chunk gets a roughly uniform altitude offset.
+      let chunk_alt = value_noise(in.pos_xz * base_freq * 0.3);
+      let alt_mul = 0.7 + chunk_alt * 0.6; // 0.7x to 1.3x per-chunk
+      // Lift slider controls height
+      let lift = mix(0.005, 0.12, lift_param) * lift_t * hs * alt_mul;
       y += lift;
     } else {
       // Ground: terrain ripped away where islands were torn out.

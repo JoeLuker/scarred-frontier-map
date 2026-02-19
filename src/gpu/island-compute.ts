@@ -141,13 +141,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let threshold = mix(0.75, 0.15, lift_t);
   let is_floating = smoothstep(threshold - 0.1, threshold + 0.1, chunk);
 
-  // Per-chunk lift variation — wider range at higher lift for dramatic separation
-  let chunk_alt = value_noise(pos * 0.01);
-  let variation = 0.2 + lift_param * 0.6;
-  let alt_mul = (1.0 - variation) + chunk_alt * variation * 2.0;
+  // Per-chunk lift variation: noise frequency below chunk frequency
+  // so each chunk gets a roughly uniform altitude offset.
+  let chunk_alt = value_noise(pos * base_freq * 0.3);
+  let alt_mul = 0.7 + chunk_alt * 0.6; // 0.7x to 1.3x per-chunk
 
   // Lift height — same formula as VS Air branch
-  let lift_height = mix(0.005, 0.08, lift_param) * lift_t * config.height_scale * alt_mul;
+  let lift_height = mix(0.005, 0.12, lift_param) * lift_t * config.height_scale * alt_mul;
 
   results[idx] = vec4f(is_floating, lift_height, planar_intensity, 0.0);
 }
