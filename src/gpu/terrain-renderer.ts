@@ -121,10 +121,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
     y += block * vt_pi * EARTH_UPLIFT_AMP * hs;
 
   } else if (vt_plane == 4u) {
-    // AIR: Ground gouge only. Island top/underside use separate meshes (vs_island).
-    let lift_param = vt_state.r;
-
-    // Read precomputed island data from compute pipeline texture.
+    // AIR: Smooth terrain + depress ground under floating islands.
+    // Island top/underside rendered by separate meshes (vs_island).
     let world_radius = u.grid_radius * u.hex_size * SQRT3;
     let mesh_spacing = u.hex_size * 0.5;
     let half_extent = world_radius + mesh_spacing * 2.0;
@@ -138,10 +136,9 @@ fn vs_main(in: VertexIn) -> VertexOut {
     let smooth_t = vt_pi * vt_pi;
     y = mix(y, median_y, smooth_t * AIR_SMOOTH_FACTOR);
 
-    // Ground gouge where islands were torn out.
-    let gouge_target = -AIR_GOUGE_DEPTH * hs;
-    let gouge_factor = is_solid * vt_pi;
-    y = mix(y, gouge_target, gouge_factor);
+    // Depress ground below sea level where islands float above.
+    // Vertex interpolation at the boundary creates a soft slope.
+    y = mix(y, -0.005 * hs, is_solid);
 
     island_mask = is_solid;
 
@@ -366,22 +363,24 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       pm.shadow_mod = mix(1.0, 0.7, pi);
       pm.specular_mod = 1.0 + 0.4 * pi;
     } else {
-      // Ground: wind-worn desaturation + crater marks
+      // Ground beneath Air overlay: exposed earth scar where island was torn away.
+      // island_mask here is the FS-computed scar (from continuous noise in island_tex),
+      // so it extends visibly beyond the solid island footprint.
       let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
       pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
 
-      let gouge = island_mask * pi;
+      let scar = island_mask; // already smoothstepped in FS before this call
       let windswept = vec3f(0.50, 0.46, 0.40);
-      let soil = vec3f(0.38, 0.28, 0.16);
-      let surface = mix(windswept, soil, gouge);
+      let soil = vec3f(0.30, 0.20, 0.08);
+      let surface = mix(windswept, soil, scar);
       pm.replace_color = surface;
-      pm.replace_strength = mix(pi * 0.15, 0.9, gouge);
-      pm.roughness_mod = mix(0.0, 0.5, gouge) * pi;
-      pm.snow_line_shift = mix(-0.1, 0.6, gouge) * pi;
-      pm.moisture_mod = mix(0.0, -0.4, gouge) * pi;
-      pm.ambient_mod = mix(1.0 + 0.1 * pi, 0.75, gouge);
-      pm.shadow_mod = mix(1.0, 0.6, gouge);
-      pm.specular_mod = mix(1.0, 0.2, gouge);
+      pm.replace_strength = mix(pi * 0.15, 0.9, scar);
+      pm.roughness_mod = mix(0.0, 0.5, scar) * pi;
+      pm.snow_line_shift = mix(-0.1, 0.6, scar) * pi;
+      pm.moisture_mod = mix(0.0, -0.4, scar) * pi;
+      pm.ambient_mod = mix(1.0 + 0.1 * pi, 0.75, scar);
+      pm.shadow_mod = mix(1.0, 0.6, scar);
+      pm.specular_mod = mix(1.0, 0.2, scar);
     }
 
   } else if (plane_type == 5u) {
@@ -521,7 +520,22 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let fs_packed_g = decode_packed_g(hex_state.g);
   let plane_type = fs_packed_g.plane_type;
   let p_intensity = hex_state.b;
-  let pm = get_planar_material(plane_type, p_intensity, in.world_pos, in.elevation, sea, in.island_mask, obj.flags);
+
+  // For Air ground fragments: read island_tex in FS for per-fragment scar mask.
+  // The continuous noise (B channel) extends the brown scar beyond the solid island
+  // footprint so it's visible around the island base (solid area is hidden by island mesh).
+  var fs_island_mask = in.island_mask;
+  if (plane_type == 4u && (obj.flags & 12u) == 0u) {
+    let world_radius = u.grid_radius * u.hex_size * SQRT3;
+    let mesh_spacing = u.hex_size * 0.5;
+    let half_extent = world_radius + mesh_spacing * 2.0;
+    let fc = i32(round((in.world_pos.x + half_extent) / mesh_spacing));
+    let fr = i32(round((in.world_pos.z + half_extent) / mesh_spacing));
+    let fs_island_data = textureLoad(island_tex, vec2i(fc, fr), 0);
+    fs_island_mask = smoothstep(0.15, 0.5, fs_island_data.b);
+  }
+
+  let pm = get_planar_material(plane_type, p_intensity, in.world_pos, in.elevation, sea, fs_island_mask, obj.flags);
 
   // Curvature approximation — must be in uniform control flow (before any
   // non-uniform branching) since dpdx/dpdy require all quad invocations active.

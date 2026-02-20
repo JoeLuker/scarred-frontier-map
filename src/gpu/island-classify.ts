@@ -46,7 +46,7 @@ function createClassifyWGSL(): string {
 
 @group(0) @binding(0) var hex_state_tex: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> cfg: IslandConfig;
-@group(0) @binding(2) var<storage, read_write> classify_buf: array<u32>;
+@group(0) @binding(2) var<storage, read_write> classify_buf: array<f32>;
 
 ` + createRenderNoiseWGSL() + /* wgsl */ `
 
@@ -65,30 +65,37 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let state = lookup_hex_state(hex.qr, cfg.grid_radius);
   let packed_g = decode_packed_g(state.g);
 
-  var is_floating: u32 = 0u;
+  // Store continuous noise value (0-1) for boundary interpolation.
+  // 0.0 = non-Air vertex, >0.5 = solid (floating), <0.5 = Air but below threshold.
+  var noise_val: f32 = 0.0;
   if (packed_g.plane_type == 4u) {
     let pi = state.b;
     let frag = packed_g.fragmentation;
+
+    if (frag < 0.01) {
+      // No fragmentation — entire Air area is one solid island.
+      noise_val = 1.0;
+    } else {
 
     let base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag);
     let detail_freq = base_freq * AIR_DETAIL_FREQ_MUL;
     let detail_w = AIR_CHUNK_BLEND_DETAIL * frag;
     let fbm_w = 1.0 - detail_w;
-    let chunk = fbm3(pos * base_freq) * fbm_w
+    // Domain-warped fBM eliminates lattice straight-line artifacts.
+    let chunk = warped_fbm3(pos * base_freq) * fbm_w
               + value_noise(pos * detail_freq) * detail_w;
     let edge_onset = saturate(pi / AIR_EDGE_ONSET);
     let threshold = mix(AIR_THRESHOLD_HIGH, AIR_COVERAGE_THRESHOLD, edge_onset);
-    let smooth_val = smoothstep(
+    noise_val = smoothstep(
       threshold - AIR_SMOOTHSTEP_WIDTH,
       threshold + AIR_SMOOTHSTEP_WIDTH,
       chunk,
     );
-    if (smooth_val > 0.5) {
-      is_floating = 1u;
-    }
+
+    } // end frag > 0
   }
 
-  classify_buf[idx] = is_floating;
+  classify_buf[idx] = noise_val;
 }
 `;
 }
@@ -99,13 +106,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 const FILTER_SEED_WGSL = CONFIG_WGSL + /* wgsl */ `
 
-@group(0) @binding(0) var<storage, read> classify_buf: array<u32>;
+@group(0) @binding(0) var<storage, read> classify_buf: array<f32>;
 @group(0) @binding(1) var<uniform> cfg: IslandConfig;
 @group(0) @binding(2) var<storage, read_write> filter_buf: array<u32>;
 @group(0) @binding(3) var<storage, read_write> jfa_buf: array<vec2i>;
 
-fn read_cls(col: u32, row: u32) -> u32 {
-  return classify_buf[row * cfg.cols + col];
+fn read_cls(col: u32, row: u32) -> bool {
+  return classify_buf[row * cfg.cols + col] > 0.5;
 }
 
 @compute @workgroup_size(${WG}, ${WG})
@@ -115,50 +122,50 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (col >= cfg.cols || row >= cfg.rows) { return; }
 
   let idx = row * cfg.cols + col;
-  let self_val = classify_buf[idx];
+  let self_floating = classify_buf[idx] > 0.5;
 
   // Non-floating vertices are never solid — mark as seed for JFA.
-  if (self_val == 0u) {
+  if (!self_floating) {
     filter_buf[idx] = 0u;
     jfa_buf[idx] = vec2i(i32(col), i32(row));
     return;
   }
 
-  // Check 4 adjacent quads. Self is already 1, so check the other 3 corners.
+  // Check 4 adjacent quads. Self is already floating, so check the other 3 corners.
   var any_solid_quad = false;
 
   // Upper-left quad: (col-1,row-1), (col,row-1), (col-1,row), (col,row)
   if (col > 0u && row > 0u) {
-    if (read_cls(col - 1u, row - 1u) == 1u
-     && read_cls(col, row - 1u) == 1u
-     && read_cls(col - 1u, row) == 1u) {
+    if (read_cls(col - 1u, row - 1u)
+     && read_cls(col, row - 1u)
+     && read_cls(col - 1u, row)) {
       any_solid_quad = true;
     }
   }
 
   // Upper-right quad: (col,row-1), (col+1,row-1), (col,row), (col+1,row)
   if (!any_solid_quad && col + 1u < cfg.cols && row > 0u) {
-    if (read_cls(col, row - 1u) == 1u
-     && read_cls(col + 1u, row - 1u) == 1u
-     && read_cls(col + 1u, row) == 1u) {
+    if (read_cls(col, row - 1u)
+     && read_cls(col + 1u, row - 1u)
+     && read_cls(col + 1u, row)) {
       any_solid_quad = true;
     }
   }
 
   // Lower-left quad: (col-1,row), (col,row), (col-1,row+1), (col,row+1)
   if (!any_solid_quad && col > 0u && row + 1u < cfg.rows) {
-    if (read_cls(col - 1u, row) == 1u
-     && read_cls(col - 1u, row + 1u) == 1u
-     && read_cls(col, row + 1u) == 1u) {
+    if (read_cls(col - 1u, row)
+     && read_cls(col - 1u, row + 1u)
+     && read_cls(col, row + 1u)) {
       any_solid_quad = true;
     }
   }
 
   // Lower-right quad: (col,row), (col+1,row), (col,row+1), (col+1,row+1)
   if (!any_solid_quad && col + 1u < cfg.cols && row + 1u < cfg.rows) {
-    if (read_cls(col + 1u, row) == 1u
-     && read_cls(col, row + 1u) == 1u
-     && read_cls(col + 1u, row + 1u) == 1u) {
+    if (read_cls(col + 1u, row)
+     && read_cls(col, row + 1u)
+     && read_cls(col + 1u, row + 1u)) {
       any_solid_quad = true;
     }
   }
@@ -230,6 +237,7 @@ const OUTPUT_WGSL = CONFIG_WGSL + /* wgsl */ `
 @group(0) @binding(1) var<uniform> cfg: IslandConfig;
 @group(0) @binding(2) var<storage, read> jfa_result: array<vec2i>;
 @group(0) @binding(3) var output_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(4) var<storage, read> classify_buf: array<f32>;
 
 @compute @workgroup_size(${WG}, ${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -250,7 +258,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
 
-  textureStore(output_tex, vec2i(i32(col), i32(row)), vec4f(is_solid, norm_dist, 0.0, 1.0));
+  // B channel = continuous noise value for boundary interpolation (marching-squares).
+  let noise_val = classify_buf[idx];
+
+  textureStore(output_tex, vec2i(i32(col), i32(row)), vec4f(is_solid, norm_dist, noise_val, 1.0));
 }
 `;
 
@@ -493,6 +504,7 @@ export class IslandClassify {
         { binding: 1, resource: { buffer: configBuf } },
         { binding: 2, resource: { buffer: resultBuf } },
         { binding: 3, resource: texture.createView() },
+        { binding: 4, resource: { buffer: classifyBuf } },
       ],
     });
 
@@ -571,8 +583,9 @@ export class IslandClassify {
     const total = cols * rows;
     const solid = new Uint8Array(total);
     const normDist = new Float32Array(total);
+    const noiseVal = new Float32Array(total);
 
-    // Extract R (is_solid) and G (norm_dist) from rgba8unorm rows,
+    // Extract R (is_solid), G (norm_dist), B (noise_val) from rgba8unorm rows,
     // accounting for row stride padding.
     for (let row = 0; row < rows; row++) {
       const rowOff = row * stagingBytesPerRow;
@@ -581,11 +594,12 @@ export class IslandClassify {
         const pixOff = rowOff + col * 4;
         solid[idx] = mapped[pixOff]! > 127 ? 1 : 0;         // R channel: is_solid
         normDist[idx] = mapped[pixOff + 1]! / 255;           // G channel: norm_dist (unorm)
+        noiseVal[idx] = mapped[pixOff + 2]! / 255;           // B channel: continuous noise
       }
     }
 
     this.stagingBuf.unmap();
-    return { solid, normDist, cols, rows };
+    return { solid, normDist, noiseVal, cols, rows };
   }
 
   destroy(): void {
@@ -604,6 +618,7 @@ export class IslandClassify {
 export interface IslandReadbackData {
   readonly solid: Uint8Array;       // 0 or 1 per grid vertex
   readonly normDist: Float32Array;  // 0 = boundary, 1 = deep center (JFA Euclidean)
+  readonly noiseVal: Float32Array;  // continuous noise (0-1) for boundary interpolation
   readonly cols: number;
   readonly rows: number;
 }

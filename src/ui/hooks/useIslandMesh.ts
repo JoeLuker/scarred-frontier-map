@@ -3,7 +3,14 @@ import { HexData, PlanarAlignment, PlanarOverlay, WorldGenConfig } from '../../c
 import { WORLD, getTerrainRenderParams } from '../../core/config';
 import type { Scene, IslandClassify, TerrainGridData } from '../../gpu';
 import { buildIslandMesh } from '../../gpu';
+import type { IslandReadbackData } from '../../gpu';
 import type { IslandMesh } from './useGpuResources';
+
+/** Shared across effect invocations — guards the single staging buffer. */
+const readbackState = {
+  busy: false,
+  pending: null as (() => void) | null,
+};
 
 export function useIslandMesh(
   planarOverlays: PlanarOverlay[],
@@ -16,6 +23,8 @@ export function useIslandMesh(
   terrainGridRef: RefObject<TerrainGridData | null>,
 ) {
   const islandKeyRef = useRef('');
+  const cachedReadbackRef = useRef<IslandReadbackData | null>(null);
+  const shapeKeyRef = useRef('');
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -29,18 +38,17 @@ export function useIslandMesh(
     const islandUnder = scene.getObject('island-under');
     if (!islandTop || !islandUnder) return;
 
-    // Check if Air overlays are present
     const airOverlays = planarOverlays.filter(o => o.type === PlanarAlignment.AIR);
-    const hasAir = airOverlays.length > 0;
-
-    if (!hasAir || !grid) {
+    if (airOverlays.length === 0 || !grid) {
       islandTop.visible = false;
       islandUnder.visible = false;
       islandKeyRef.current = '';
+      shapeKeyRef.current = '';
+      cachedReadbackRef.current = null;
       return;
     }
 
-    // Serialize Air overlay state to detect changes
+    // Full key — every parameter that affects the mesh.
     const key = airOverlays.map(o =>
       `${o.id}:${o.coordinates.q},${o.coordinates.r}:${o.intensity}:${o.radius}:${o.falloff}:${o.fragmentation}:${o.lift}`
     ).sort().join('|') + `|cfg:${worldConfig.seed}:${worldConfig.verticality}:${worldConfig.waterLevel}`;
@@ -52,29 +60,72 @@ export function useIslandMesh(
     }
     islandKeyRef.current = key;
 
+    // Shape key — only parameters that affect classify output (island footprint).
+    // Lift, verticality, waterLevel only affect Y computation — skip readback for those.
+    const shapeKey = airOverlays.map(o =>
+      `${o.id}:${o.coordinates.q},${o.coordinates.r}:${o.intensity}:${o.radius}:${o.falloff}:${o.fragmentation}`
+    ).sort().join('|') + `|seed:${worldConfig.seed}`;
+
+    const needsReadback = shapeKey !== shapeKeyRef.current;
+    shapeKeyRef.current = shapeKey;
+
     const { seaLevel, landRange, heightScale } = getTerrainRenderParams(worldConfig);
     let cancelled = false;
 
-    requestIdleCallback(() => {
+    function uploadMesh(readbackData: IslandReadbackData) {
       if (cancelled) return;
-      ic.readback().then(readbackData => {
-        if (cancelled) return;
-        const result = buildIslandMesh(
-          readbackData, hexes, grid, WORLD.HEX_SIZE,
-          { seaLevel, landRange, heightScale },
-        );
-        if (!result) {
-          islandTop.visible = false;
-          islandUnder.visible = false;
-          return;
-        }
+      cachedReadbackRef.current = readbackData;
+      const result = buildIslandMesh(
+        readbackData, hexes, grid!, WORLD.HEX_SIZE,
+        { seaLevel, landRange, heightScale },
+      );
+      if (!result) {
+        islandTop!.visible = false;
+        islandUnder!.visible = false;
+      } else {
         topMesh.upload(result.top);
         underMesh.upload(result.underside);
-        islandTop.visible = true;
-        islandUnder.visible = true;
-        console.log(`Island mesh: top ${result.top.vertexCount}v/${result.top.indexCount / 3}t, under ${result.underside.vertexCount}v/${result.underside.indexCount / 3}t`);
+        islandTop!.visible = true;
+        islandUnder!.visible = true;
+      }
+    }
+
+    if (!needsReadback && cachedReadbackRef.current) {
+      // Shape unchanged — just rebuild Y positions from cached readback.
+      uploadMesh(cachedReadbackRef.current);
+      return;
+    }
+
+    // Shape changed — need fresh readback from classify output.
+    function doReadback() {
+      if (cancelled) return;
+      if (readbackState.busy) {
+        readbackState.pending = doReadback;
+        return;
+      }
+      readbackState.busy = true;
+      readbackState.pending = null;
+
+      ic.readback().then(data => {
+        readbackState.busy = false;
+        uploadMesh(data);
+        // Drain pending (another effect queued while we were busy).
+        if (readbackState.pending) {
+          const fn = readbackState.pending;
+          readbackState.pending = null;
+          fn();
+        }
+      }).catch(() => {
+        readbackState.busy = false;
+        if (readbackState.pending) {
+          const fn = readbackState.pending;
+          readbackState.pending = null;
+          fn();
+        }
       });
-    });
+    }
+
+    doReadback();
 
     return () => { cancelled = true; };
   }, [planarOverlays, worldConfig, hexes]);
