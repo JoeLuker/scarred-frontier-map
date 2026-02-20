@@ -72,8 +72,8 @@ export function flavorFromId(id: number): string {
 export const OBJECT_FLAGS = {
   IS_TERRAIN: 0x01,
   IS_SEA: 0x02,
-  IS_ISLAND_LAYER: 0x04,
-  IS_ISLAND_UNDERSIDE: 0x08,
+  IS_ISLAND_DRAW: 0x04,
+  IS_ISLAND_UNDER: 0x08,
 } as const;
 
 // --- GPU context ---
@@ -88,3 +88,10 @@ export interface GpuContext {
 // Terrain type is resolved per-fragment from the hex state texture (Layer 3), not per-vertex.
 export const MESH_VERTEX_STRIDE = 7;
 export const MESH_VERTEX_BYTE_STRIDE = MESH_VERTEX_STRIDE * 4;
+
+// --- Island mesh vertex data layout ---
+// Each vertex: posXZ(2) + worldY(1) + elevation(1) + moisture(1) + normalXYZ(3) = 8 floats = 32 bytes
+// worldY is pre-baked (smoothing + lift + cone), separate from elevation so FS gets
+// correct terrain elevation for biome logic (snow line, rock blend) unaffected by island height.
+export const ISLAND_VERTEX_STRIDE = 8;
+export const ISLAND_VERTEX_BYTE_STRIDE = ISLAND_VERTEX_STRIDE * 4;

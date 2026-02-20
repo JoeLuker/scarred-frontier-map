@@ -1,7 +1,26 @@
-import { MESH_VERTEX_STRIDE } from './types';
+/**
+ * CPU mesh builder for floating island geometry.
+ *
+ * Produces two separate meshes (top surface + underside with walls) from:
+ *   - IslandClassify readback data (solid/normDist per grid vertex)
+ *   - CPU hex lookup for per-hex planar params (intensity, lift, fragmentation)
+ *   - Terrain grid data (positions, elevations, moistures)
+ *
+ * 8-float island vertex layout:
+ *   [pos_x, pos_z, world_y, elevation, moisture, normal_x, normal_y, normal_z]
+ *
+ * world_y is pre-baked (smoothing + lift + cone), separate from elevation so the
+ * fragment shader gets correct terrain elevation for biome logic (snow line, rock
+ * blend, etc.) without inflated island height corrupting those calculations.
+ */
+
+import { ISLAND_VERTEX_STRIDE } from './types';
 import { computeDisplacedY } from './terrain-mesh';
 import type { MeshBuffers, TerrainGridData } from './terrain-mesh';
+import type { IslandReadbackData } from './island-classify';
+import { pixelToHex } from '../core/geometry';
 import { PLANAR } from '../core/config';
+import type { HexData, PlanarAlignment } from '../core/types';
 
 // --- CPU-side value noise for underside rocky texture ---
 // Does NOT need to match any GPU noise — purely cosmetic.
@@ -152,7 +171,7 @@ function computeComponents(
 
 // ============================================================
 // Write a single wall quad (4 verts, 2 triangles) into the output arrays.
-// Returns the number of wall vertices added (always 4, or 0 on degenerate).
+// Uses 8-float island vertex layout.
 // ============================================================
 function writeWallQuad(
   wallVerts: Float32Array,
@@ -163,7 +182,6 @@ function writeWallQuad(
   ax: number, az: number, topAy: number, botAy: number,
   bx: number, bz: number, topBy: number, botBy: number,
   outsideX: number, outsideZ: number,
-  heightScale: number,
 ): { verts: number; indices: number } {
   const edx = bx - ax;
   const edz = bz - az;
@@ -180,24 +198,24 @@ function writeWallQuad(
   nx /= nlen;
   nz /= nlen;
 
-  const S = MESH_VERTEX_STRIDE;
+  const S = ISLAND_VERTEX_STRIDE;
   const o0 = wallVertOff * S;
   const o1 = (wallVertOff + 1) * S;
   const o2 = (wallVertOff + 2) * S;
   const o3 = (wallVertOff + 3) * S;
 
-  // topA, topB, botB, botA
-  wallVerts[o0] = ax; wallVerts[o0+1] = az; wallVerts[o0+2] = topAy / heightScale; wallVerts[o0+3] = 0;
-  wallVerts[o0+4] = nx; wallVerts[o0+5] = 0; wallVerts[o0+6] = nz;
+  // topA, topB, botB, botA — elev/moisture=0 for wall faces (underside material)
+  wallVerts[o0] = ax; wallVerts[o0+1] = az; wallVerts[o0+2] = topAy; wallVerts[o0+3] = 0; wallVerts[o0+4] = 0;
+  wallVerts[o0+5] = nx; wallVerts[o0+6] = 0; wallVerts[o0+7] = nz;
 
-  wallVerts[o1] = bx; wallVerts[o1+1] = bz; wallVerts[o1+2] = topBy / heightScale; wallVerts[o1+3] = 0;
-  wallVerts[o1+4] = nx; wallVerts[o1+5] = 0; wallVerts[o1+6] = nz;
+  wallVerts[o1] = bx; wallVerts[o1+1] = bz; wallVerts[o1+2] = topBy; wallVerts[o1+3] = 0; wallVerts[o1+4] = 0;
+  wallVerts[o1+5] = nx; wallVerts[o1+6] = 0; wallVerts[o1+7] = nz;
 
-  wallVerts[o2] = bx; wallVerts[o2+1] = bz; wallVerts[o2+2] = botBy / heightScale; wallVerts[o2+3] = 0;
-  wallVerts[o2+4] = nx; wallVerts[o2+5] = 0; wallVerts[o2+6] = nz;
+  wallVerts[o2] = bx; wallVerts[o2+1] = bz; wallVerts[o2+2] = botBy; wallVerts[o2+3] = 0; wallVerts[o2+4] = 0;
+  wallVerts[o2+5] = nx; wallVerts[o2+6] = 0; wallVerts[o2+7] = nz;
 
-  wallVerts[o3] = ax; wallVerts[o3+1] = az; wallVerts[o3+2] = botAy / heightScale; wallVerts[o3+3] = 0;
-  wallVerts[o3+4] = nx; wallVerts[o3+5] = 0; wallVerts[o3+6] = nz;
+  wallVerts[o3] = ax; wallVerts[o3+1] = az; wallVerts[o3+2] = botAy; wallVerts[o3+3] = 0; wallVerts[o3+4] = 0;
+  wallVerts[o3+5] = nx; wallVerts[o3+6] = 0; wallVerts[o3+7] = nz;
 
   const b = vertBaseIdx;
   wallIndices[wallIdxOff]     = b;
@@ -210,34 +228,76 @@ function writeWallQuad(
   return { verts: 4, indices: 6 };
 }
 
+/**
+ * Build island top + underside meshes from classify readback data + hex data.
+ *
+ * 9-phase algorithm:
+ *   1. Build hex data lookup map
+ *   2. Per-vertex classification from readback
+ *   3. Solid quads (all 4 corners solid)
+ *   4. Derive solid vertices (belong to >= 1 solid quad)
+ *   5. Distance field + connected components
+ *   6. Per-vertex Y computation (top + bottom)
+ *   7. Write vertex buffers (8-float stride)
+ *   8. Write index buffers
+ *   9. Wall quads + combine into underside mesh
+ */
 export function buildIslandMesh(
-  classifyData: Float32Array,
+  readback: IslandReadbackData,
+  hexes: HexData[],
   grid: TerrainGridData,
+  hexSize: number,
   params: IslandRenderParams,
 ): IslandMeshResult | null {
   const { positions, elevations, moistures, cols, rows, originX, originZ, spacing, cullRadius2 } = grid;
   const { seaLevel, landRange, heightScale } = params;
+  const { solid: readbackSolid } = readback;
   const totalVerts = cols * rows;
   const quadCols = cols - 1;
   const quadRows = rows - 1;
   const totalQuads = quadCols * quadRows;
 
   // ================================================================
-  // Phase 1: Per-vertex classification from GPU results
+  // Phase 1: Build hex data lookup map for CPU hex queries
   // ================================================================
-  const vertIsland = new Uint8Array(totalVerts);
-  for (let i = 0; i < totalVerts; i++) {
-    const x = positions[i * 2]!;
-    const z = positions[i * 2 + 1]!;
-    if (x * x + z * z > cullRadius2) continue;
-    if (classifyData[i * 4]! > 0.5) {
-      vertIsland[i] = 1;
-    }
+  const hexMap = new Map<string, { intensity: number; lift: number; frag: number }>();
+  const AIR: PlanarAlignment = 'Plane of Air' as PlanarAlignment;
+  for (let i = 0; i < hexes.length; i++) {
+    const h = hexes[i]!;
+    if (h.planarAlignment !== AIR) continue;
+    const key = `${h.coordinates.q},${h.coordinates.r}`;
+    hexMap.set(key, {
+      intensity: h.planarIntensity,
+      lift: h.planarLift,
+      frag: h.planarFragmentation,
+    });
   }
 
   // ================================================================
-  // Phase 2: Solid quads — the single source of truth for all mesh topology.
-  // A quad is solid iff all 4 corners are island vertices.
+  // Phase 2: Per-vertex classification from readback + cull radius
+  // ================================================================
+  const vertIsland = new Uint8Array(totalVerts);
+  const vertIntensity = new Float32Array(totalVerts);
+  const vertLift = new Float32Array(totalVerts);
+
+  for (let i = 0; i < totalVerts; i++) {
+    if (!readbackSolid[i]) continue;
+    const x = positions[i * 2]!;
+    const z = positions[i * 2 + 1]!;
+    if (x * x + z * z > cullRadius2) continue;
+
+    // Look up hex to get per-hex Air overlay params
+    const hex = pixelToHex(x, z, hexSize);
+    const hexData = hexMap.get(`${hex.q},${hex.r}`);
+    if (!hexData) continue;
+
+    vertIsland[i] = 1;
+    vertIntensity[i] = hexData.intensity;
+    vertLift[i] = hexData.lift;
+  }
+
+  // ================================================================
+  // Phase 3: Solid quads — quad is solid iff all 4 corners are island vertices
   // ================================================================
   const solidQuad = new Uint8Array(totalQuads);
   let solidCount = 0;
@@ -257,8 +317,7 @@ export function buildIslandMesh(
   if (solidCount === 0) return null;
 
   // ================================================================
-  // Phase 3: Derive solid vertices — only vertices that belong to at least
-  // one solid quad get included in the mesh. This prevents orphan geometry.
+  // Phase 4: Derive solid vertices — only vertices belonging to >= 1 solid quad
   // ================================================================
   const vertUsed = new Uint8Array(totalVerts);
   for (let qr = 0; qr < quadRows; qr++) {
@@ -273,7 +332,7 @@ export function buildIslandMesh(
   }
 
   // ================================================================
-  // Phase 4: Distance field + connected components on solid vertices
+  // Phase 5: Distance field + connected components for cone depth scaling
   // ================================================================
   const distField = computeDistanceField(vertUsed, cols, rows);
   const { componentOf, maxDist } = computeComponents(vertUsed, distField, cols, rows);
@@ -293,7 +352,7 @@ export function buildIslandMesh(
   });
 
   // ================================================================
-  // Phase 5: Compute per-vertex Y positions (top + bottom)
+  // Phase 6: Per-vertex Y computation (top + bottom)
   // ================================================================
   const gridToVert = new Int32Array(totalVerts);
   gridToVert.fill(-1);
@@ -310,31 +369,35 @@ export function buildIslandMesh(
 
     const elev = elevations[i]!;
     const baseY = computeDisplacedY(elev, seaLevel, landRange, heightScale);
-    const pi = classifyData[i * 4 + 2]!;
+    const pi = vertIntensity[i]!;
     const smoothedY = applyAirSmoothing(baseY, heightScale, pi);
-    const liftHeight = classifyData[i * 4 + 1]!;
+
+    // Per-chunk altitude variation (matches VS)
+    const x = positions[i * 2]!;
+    const z = positions[i * 2 + 1]!;
+    const chunkAlt = simpleNoise(x * PLANAR.AIR.ALT_VARIATION_FREQ, z * PLANAR.AIR.ALT_VARIATION_FREQ);
+    const altMul = 0.8 + chunkAlt * 0.4;
+    const liftHeight = vertLift[i]! * PLANAR.AIR.MAX_LIFT_FRACTION * heightScale * altMul;
     const topY = smoothedY + liftHeight;
     topYGrid[i] = topY;
 
+    // Cone depth from distance field
     const d = depth[i]!;
     const envelope = d; // linear cone: 0 at edge, 1 at center
 
     const comp = componentOf[i]!;
     const tScale = comp >= 0 ? compThicknessScale[comp]! : 1;
     const baseThick = BASE_THICKNESS * envelope * heightScale * tScale;
-
-    const x = positions[i * 2]!;
-    const z = positions[i * 2 + 1]!;
     const stalactite = stalactiteNoise(x, z) * STALACTITE_AMP * envelope * heightScale * tScale;
 
     bottomYGrid[i] = topY - baseThick - stalactite;
   }
 
   // ================================================================
-  // Phase 6: Write vertex buffers (top + bottom, shared indexing)
+  // Phase 7: Write vertex buffers (8-float island stride)
   // ================================================================
-  const topVertices = new Float32Array(vertCount * MESH_VERTEX_STRIDE);
-  const bottomVertices = new Float32Array(vertCount * MESH_VERTEX_STRIDE);
+  const topVertices = new Float32Array(vertCount * ISLAND_VERTEX_STRIDE);
+  const bottomVertices = new Float32Array(vertCount * ISLAND_VERTEX_STRIDE);
   const invSpacing2 = 1 / (2 * spacing);
 
   for (let row = 0; row < rows; row++) {
@@ -345,6 +408,7 @@ export function buildIslandMesh(
 
       const x = positions[idx * 2]!;
       const z = positions[idx * 2 + 1]!;
+      const elev = elevations[idx]!;
       const moist = moistures[idx]!;
 
       const leftIdx = col > 0 ? idx - 1 : idx;
@@ -352,7 +416,7 @@ export function buildIslandMesh(
       const upIdx = row > 0 ? idx - cols : idx;
       const downIdx = row < rows - 1 ? idx + cols : idx;
 
-      // Top normals
+      // Top normals from topY grid
       const topY = topYGrid[idx]!;
       const topLeft  = vertUsed[leftIdx]  ? topYGrid[leftIdx]!  : topY;
       const topRight = vertUsed[rightIdx] ? topYGrid[rightIdx]! : topY;
@@ -365,14 +429,16 @@ export function buildIslandMesh(
       const tlen = Math.sqrt(tnx * tnx + tny * tny + tnz * tnz);
       tnx /= tlen; tny /= tlen; tnz /= tlen;
 
-      const topOff = vi * MESH_VERTEX_STRIDE;
+      // Top: [x, z, topY, elevation, moisture, nx, ny, nz]
+      const topOff = vi * ISLAND_VERTEX_STRIDE;
       topVertices[topOff]     = x;
       topVertices[topOff + 1] = z;
-      topVertices[topOff + 2] = topY / heightScale;
-      topVertices[topOff + 3] = moist;
-      topVertices[topOff + 4] = tnx;
-      topVertices[topOff + 5] = tny;
-      topVertices[topOff + 6] = tnz;
+      topVertices[topOff + 2] = topY;
+      topVertices[topOff + 3] = elev;
+      topVertices[topOff + 4] = moist;
+      topVertices[topOff + 5] = tnx;
+      topVertices[topOff + 6] = tny;
+      topVertices[topOff + 7] = tnz;
 
       // Bottom normals (face downward)
       const bottomY = bottomYGrid[idx]!;
@@ -387,20 +453,21 @@ export function buildIslandMesh(
       const blen = Math.sqrt(bnx * bnx + bny * bny + bnz * bnz);
       bnx /= blen; bny /= blen; bnz /= blen;
 
-      const botOff = vi * MESH_VERTEX_STRIDE;
+      // Bottom: [x, z, bottomY, 0, 0, bnx, bny, bnz] — elev/moisture=0 for underside
+      const botOff = vi * ISLAND_VERTEX_STRIDE;
       bottomVertices[botOff]     = x;
       bottomVertices[botOff + 1] = z;
-      bottomVertices[botOff + 2] = bottomY / heightScale;
-      bottomVertices[botOff + 3] = 0; // moisture=0 signals underside
-      bottomVertices[botOff + 4] = bnx;
-      bottomVertices[botOff + 5] = bny;
-      bottomVertices[botOff + 6] = bnz;
+      bottomVertices[botOff + 2] = bottomY;
+      bottomVertices[botOff + 3] = 0;
+      bottomVertices[botOff + 4] = 0;
+      bottomVertices[botOff + 5] = bnx;
+      bottomVertices[botOff + 6] = bny;
+      bottomVertices[botOff + 7] = bnz;
     }
   }
 
   // ================================================================
-  // Phase 7: Index buffers — derived entirely from solid quads.
-  // Top + bottom surfaces share the same quad set (different winding).
+  // Phase 8: Index buffers — derived from solid quads, top=CCW, bottom=reversed
   // ================================================================
   const topIndices = new Uint32Array(solidCount * 6);
   const bottomIndices = new Uint32Array(solidCount * 6);
@@ -436,13 +503,9 @@ export function buildIslandMesh(
   }
 
   // ================================================================
-  // Phase 8: Side walls — derived from boundary edges of solid quads.
-  // An edge gets a wall iff: it borders a solid quad on one side and
-  // either no quad or a non-solid quad on the other side.
-  // This guarantees walls only exist where top+bottom surfaces exist.
+  // Phase 9: Wall quads (boundary edges) + combine into underside mesh
   // ================================================================
 
-  // Helper: is the quad at (qr, qc) solid?
   function isQuadSolid(qr: number, qc: number): boolean {
     if (qr < 0 || qr >= quadRows || qc < 0 || qc >= quadCols) return false;
     return solidQuad[qr * quadCols + qc] === 1;
@@ -450,24 +513,19 @@ export function buildIslandMesh(
 
   // Count boundary edges for allocation
   let boundaryEdgeCount = 0;
-  // Horizontal edges: between quad rows qr-1 and qr (the top edge of quad at qr)
   for (let qr = 0; qr < quadRows; qr++) {
     for (let qc = 0; qc < quadCols; qc++) {
       if (!isQuadSolid(qr, qc)) continue;
-      // Top edge of this quad: is the quad above non-solid?
       if (!isQuadSolid(qr - 1, qc)) boundaryEdgeCount++;
-      // Bottom edge
       if (!isQuadSolid(qr + 1, qc)) boundaryEdgeCount++;
-      // Left edge
       if (!isQuadSolid(qr, qc - 1)) boundaryEdgeCount++;
-      // Right edge
       if (!isQuadSolid(qr, qc + 1)) boundaryEdgeCount++;
     }
   }
 
   const maxWallVerts = boundaryEdgeCount * 4;
   const maxWallIndices = boundaryEdgeCount * 6;
-  const wallVerts = new Float32Array(maxWallVerts * MESH_VERTEX_STRIDE);
+  const wallVerts = new Float32Array(maxWallVerts * ISLAND_VERTEX_STRIDE);
   const wallIndices = new Uint32Array(maxWallIndices);
   let wallVertCount = 0;
   let wallIdxCount = 0;
@@ -490,7 +548,7 @@ export function buildIslandMesh(
           vertCount + wallVertCount,
           positions[g10 * 2]!, positions[g10 * 2 + 1]!, topYGrid[g10]!, bottomYGrid[g10]!,
           positions[g00 * 2]!, positions[g00 * 2 + 1]!, topYGrid[g00]!, bottomYGrid[g00]!,
-          outsideX, outsideZ, heightScale,
+          outsideX, outsideZ,
         );
         wallVertCount += r.verts;
         wallIdxCount += r.indices;
@@ -505,7 +563,7 @@ export function buildIslandMesh(
           vertCount + wallVertCount,
           positions[g01 * 2]!, positions[g01 * 2 + 1]!, topYGrid[g01]!, bottomYGrid[g01]!,
           positions[g11 * 2]!, positions[g11 * 2 + 1]!, topYGrid[g11]!, bottomYGrid[g11]!,
-          outsideX, outsideZ, heightScale,
+          outsideX, outsideZ,
         );
         wallVertCount += r.verts;
         wallIdxCount += r.indices;
@@ -520,7 +578,7 @@ export function buildIslandMesh(
           vertCount + wallVertCount,
           positions[g00 * 2]!, positions[g00 * 2 + 1]!, topYGrid[g00]!, bottomYGrid[g00]!,
           positions[g01 * 2]!, positions[g01 * 2 + 1]!, topYGrid[g01]!, bottomYGrid[g01]!,
-          outsideX, outsideZ, heightScale,
+          outsideX, outsideZ,
         );
         wallVertCount += r.verts;
         wallIdxCount += r.indices;
@@ -535,7 +593,7 @@ export function buildIslandMesh(
           vertCount + wallVertCount,
           positions[g11 * 2]!, positions[g11 * 2 + 1]!, topYGrid[g11]!, bottomYGrid[g11]!,
           positions[g10 * 2]!, positions[g10 * 2 + 1]!, topYGrid[g10]!, bottomYGrid[g10]!,
-          outsideX, outsideZ, heightScale,
+          outsideX, outsideZ,
         );
         wallVertCount += r.verts;
         wallIdxCount += r.indices;
@@ -543,16 +601,14 @@ export function buildIslandMesh(
     }
   }
 
-  // ================================================================
-  // Phase 9: Combine underside (bottom surface + walls) into one mesh
-  // ================================================================
+  // Combine underside (bottom surface + walls) into one mesh
   const totalUnderVerts = vertCount + wallVertCount;
   const totalUnderIndices = botIdxCount + wallIdxCount;
-  const combinedUnderVerts = new Float32Array(totalUnderVerts * MESH_VERTEX_STRIDE);
-  combinedUnderVerts.set(bottomVertices.subarray(0, vertCount * MESH_VERTEX_STRIDE));
+  const combinedUnderVerts = new Float32Array(totalUnderVerts * ISLAND_VERTEX_STRIDE);
+  combinedUnderVerts.set(bottomVertices.subarray(0, vertCount * ISLAND_VERTEX_STRIDE));
   combinedUnderVerts.set(
-    wallVerts.subarray(0, wallVertCount * MESH_VERTEX_STRIDE),
-    vertCount * MESH_VERTEX_STRIDE,
+    wallVerts.subarray(0, wallVertCount * ISLAND_VERTEX_STRIDE),
+    vertCount * ISLAND_VERTEX_STRIDE,
   );
 
   const combinedUnderIndices = new Uint32Array(totalUnderIndices);
@@ -561,7 +617,7 @@ export function buildIslandMesh(
 
   return {
     top: {
-      vertices: topVertices.subarray(0, vertCount * MESH_VERTEX_STRIDE),
+      vertices: topVertices.subarray(0, vertCount * ISLAND_VERTEX_STRIDE),
       indices: topIndices.subarray(0, topIdxCount),
       vertexCount: vertCount,
       indexCount: topIdxCount,

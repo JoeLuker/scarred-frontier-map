@@ -31,11 +31,12 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var hex_state_tex: texture_2d<f32>;
+@group(0) @binding(2) var island_tex: texture_2d<f32>;
 
 // Per-object configuration (scene graph — identity model for terrain/sea)
 struct ObjectConfig {
   model: mat4x4f,   // 64 bytes — world transform
-  flags: u32,       // 4 bytes  — bit 0: IS_TERRAIN, bit 1: IS_SEA, bit 2: IS_ISLAND_LAYER, bit 3: IS_ISLAND_UNDERSIDE
+  flags: u32,       // 4 bytes  — bit 0: IS_TERRAIN, bit 1: IS_SEA, bit 2: IS_ISLAND_DRAW, bit 3: IS_ISLAND_UNDER
   _pad0: u32,
   _pad1: u32,
   _pad2: u32,       // total: 80 bytes (16-byte aligned)
@@ -78,23 +79,6 @@ fn vs_main(in: VertexIn) -> VertexOut {
   let land_range = max(1.0 - sea, 0.001);
   let hs = u.height_scale;
 
-  // Island meshes (top + underside): elevation field stores pre-baked world Y.
-  // Skip displacement_curve and all planar displacement — geometry is final.
-  if ((obj.flags & 12u) != 0u) {
-    let y = in.elevation * hs;
-    let local = vec4f(in.pos_xz.x, y, in.pos_xz.y, 1.0);
-    let world = (obj.model * local).xyz;
-    let clip = u.view_proj * vec4f(world, 1.0);
-    var out: VertexOut;
-    out.clip_pos = clip;
-    out.world_pos = world;
-    out.elevation = in.elevation;
-    out.moisture = in.moisture;
-    out.smooth_normal = in.normal;
-    out.island_mask = 1.0;
-    return out;
-  }
-
   // Base elevation displacement. Rivers have elevation = seaLevel,
   // so normElev = 0 → displacement_curve(0) = 0 → no displacement.
   let norm_elev = clamp((in.elevation - sea) / land_range, 0.0, 1.0);
@@ -103,11 +87,12 @@ fn vs_main(in: VertexIn) -> VertexOut {
     y = displacement_curve(norm_elev) * hs;
   }
 
-  // Island meshes use the early-exit path above; only terrain ground reaches here.
-  var island_mask: f32 = 1.0;
+  // island_mask: 0 = ground, 1 = floating island (set in Air branch only).
+  var island_mask: f32 = 0.0;
 
   // Planar vertex displacement — terrain-aware reshaping via hex_state_tex.
   // Each plane reshapes terrain with geological purpose, not random noise.
+  // Air plane: both ground crater (gouge) and floating islands (lift) in one pass.
   // Zero mesh rebuilds: hex_state_tex updates are a cheap CPU texture write.
   let vt_hex = pixel_to_hex(in.pos_xz.x, in.pos_xz.y, u.hex_size);
   let vt_state = lookup_hex_state(vt_hex.qr, u.grid_radius);
@@ -136,26 +121,29 @@ fn vs_main(in: VertexIn) -> VertexOut {
     y += block * vt_pi * EARTH_UPLIFT_AMP * hs;
 
   } else if (vt_plane == 4u) {
-    // AIR: ground terrain only — island meshes use the early-exit path above.
-    let frag = vt_packed_g.fragmentation;
+    // AIR: Ground gouge only. Island top/underside use separate meshes (vs_island).
+    let lift_param = vt_state.r;
 
-    let base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag);
-    let detail_freq = base_freq * AIR_DETAIL_FREQ_MUL;
-    let chunk = fbm3(in.pos_xz * base_freq) * AIR_CHUNK_BLEND_FBM + value_noise(in.pos_xz * detail_freq) * AIR_CHUNK_BLEND_DETAIL;
-    let edge_onset = saturate(vt_pi / AIR_EDGE_ONSET);
-    let threshold = mix(AIR_THRESHOLD_HIGH, AIR_COVERAGE_THRESHOLD, edge_onset);
-    let is_floating = smoothstep(threshold - AIR_SMOOTHSTEP_WIDTH, threshold + AIR_SMOOTHSTEP_WIDTH, chunk);
+    // Read precomputed island data from compute pipeline texture.
+    let world_radius = u.grid_radius * u.hex_size * SQRT3;
+    let mesh_spacing = u.hex_size * 0.5;
+    let half_extent = world_radius + mesh_spacing * 2.0;
+    let grid_col = i32(round((in.pos_xz.x + half_extent) / mesh_spacing));
+    let grid_row = i32(round((in.pos_xz.y + half_extent) / mesh_spacing));
+    let island_data = textureLoad(island_tex, vec2i(grid_col, grid_row), 0);
+    let is_solid = island_data.r;
 
-    // Smoothing scales with intensity² — barely visible at overlay edges,
-    // ramps up in the interior. Prevents sharp cliffs at overlay boundary.
+    // Air smoothing: scales with intensity².
     let median_y = displacement_curve(AIR_SMOOTH_MEDIAN) * hs;
     let smooth_t = vt_pi * vt_pi;
     y = mix(y, median_y, smooth_t * AIR_SMOOTH_FACTOR);
 
-    // Terrain ripped away where islands were torn out.
+    // Ground gouge where islands were torn out.
     let gouge_target = -AIR_GOUGE_DEPTH * hs;
-    let gouge_factor = is_floating * vt_pi;
+    let gouge_factor = is_solid * vt_pi;
     y = mix(y, gouge_target, gouge_factor);
+
+    island_mask = is_solid;
 
   } else if (vt_plane == 5u) {
     // POSITIVE: gentle growth uplift
@@ -189,6 +177,34 @@ fn vs_main(in: VertexIn) -> VertexOut {
   out.moisture = in.moisture;
   out.smooth_normal = in.normal;
   out.island_mask = island_mask;
+  return out;
+}
+
+// ============================================================
+// Island vertex shader — dedicated mesh with pre-baked Y
+// No displacement_curve, no hex state lookup, no noise — all pre-baked by CPU.
+// ============================================================
+
+struct VertexIslandIn {
+  @location(0) pos_xz: vec2f,
+  @location(1) world_y: f32,
+  @location(2) elevation: f32,
+  @location(3) moisture: f32,
+  @location(4) normal: vec3f,
+}
+
+@vertex
+fn vs_island(in: VertexIslandIn) -> VertexOut {
+  let local = vec4f(in.pos_xz.x, in.world_y, in.pos_xz.y, 1.0);
+  let world = (obj.model * local).xyz;
+
+  var out: VertexOut;
+  out.clip_pos = u.view_proj * vec4f(world, 1.0);
+  out.world_pos = world;
+  out.elevation = in.elevation;
+  out.moisture = in.moisture;
+  out.smooth_normal = in.normal;
+  out.island_mask = 1.0;
   return out;
 }
 
@@ -231,7 +247,7 @@ struct PlanarMaterial {
   specular_mod: f32,
 }
 
-fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, sea: f32, frag: f32, lift: f32) -> PlanarMaterial {
+fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, sea: f32, island_mask: f32, obj_flags: u32) -> PlanarMaterial {
   var pm: PlanarMaterial;
   pm.normal_offset = vec3f(0.0);
   pm.replace_color = vec3f(0.5);
@@ -332,13 +348,11 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     pm.specular_mod = mix(1.0, 0.4, pi);
 
   } else if (plane_type == 4u) {
-    // ── AIR: Floating islands (dual-layer) ──
-    // Ground layer: wind-scoured surfaces + crater marks where islands lifted.
-    // Island layer: ethereal sky-stone material with glow.
-    let is_island_layer = (obj.flags & 4u) != 0u;
+    // ── AIR: Dual-draw — ground crater vs floating island material ──
+    let is_island_draw = (obj_flags & 4u) != 0u;
 
-    if (is_island_layer) {
-      // Island layer: subtle cool tint, preserves terrain identity
+    if (is_island_draw) {
+      // Island surface: subtle cool tint, preserves terrain identity
       let cn = value_noise(wn * 0.02 + vec2f(5.0, 11.0)) - 0.5;
       pm.normal_offset = vec3f(cn * 0.1, 0.1, cn * 0.08) * pi;
 
@@ -352,20 +366,11 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
       pm.shadow_mod = mix(1.0, 0.7, pi);
       pm.specular_mod = 1.0 + 0.4 * pi;
     } else {
-      // Ground layer: subtle wind-worn desaturation + crater marks
+      // Ground: wind-worn desaturation + crater marks
       let a1 = (value_noise(wn * 0.05 + vec2f(3.0, 7.0)) - 0.5);
       pm.normal_offset = vec3f(a1 * 0.2, value_noise(wn * 0.03) * 0.3, a1 * 0.15) * pi;
 
-      // Recompute chunk noise for crater marks (ground layer only)
-      let fs_base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag);
-      let fs_detail_freq = fs_base_freq * AIR_DETAIL_FREQ_MUL;
-      let chunk = fbm3(wn * fs_base_freq) * AIR_CHUNK_BLEND_FBM + value_noise(wn * fs_detail_freq) * AIR_CHUNK_BLEND_DETAIL;
-      let edge_onset = saturate(pi / AIR_EDGE_ONSET);
-      let threshold = mix(AIR_THRESHOLD_HIGH, AIR_COVERAGE_THRESHOLD, edge_onset);
-      let is_floating = smoothstep(threshold - AIR_SMOOTHSTEP_WIDTH, threshold + AIR_SMOOTHSTEP_WIDTH, chunk);
-
-      // Crater areas: exposed brown soil/dirt where terrain was ripped out
-      let gouge = is_floating * pi;
+      let gouge = island_mask * pi;
       let windswept = vec3f(0.50, 0.46, 0.40);
       let soil = vec3f(0.38, 0.28, 0.16);
       let surface = mix(windswept, soil, gouge);
@@ -516,7 +521,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let fs_packed_g = decode_packed_g(hex_state.g);
   let plane_type = fs_packed_g.plane_type;
   let p_intensity = hex_state.b;
-  let pm = get_planar_material(plane_type, p_intensity, in.world_pos, in.elevation, sea, fs_packed_g.fragmentation, hex_state.r);
+  let pm = get_planar_material(plane_type, p_intensity, in.world_pos, in.elevation, sea, in.island_mask, obj.flags);
 
   // Curvature approximation — must be in uniform control flow (before any
   // non-uniform branching) since dpdx/dpdy require all quad invocations active.
@@ -529,29 +534,27 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   let hex_dist = max(max(abs(hex.qr.x), abs(hex.qr.y)), abs(hex.qr.x + hex.qr.y));
   let is_beyond_grid = hex_dist > u.grid_radius;
 
-  // (island_mask discard removed — island meshes now have pre-baked geometry,
-  //  no fragment-level classification needed.)
+  // Island + underside draws: discard non-floating fragments (after derivatives for uniformity).
+  if ((obj.flags & 12u) != 0u && in.island_mask < 0.5) {
+    discard;
+  }
 
-  // ═══════════════════════════════════════════════════════════════
   // Island underside: rocky material with simplified lighting.
   // Early return — no biome, no hex grid, no snow.
-  // ═══════════════════════════════════════════════════════════════
   if ((obj.flags & 8u) != 0u) {
     let rock_n = value_noise(in.world_pos.xz * 0.08);
     let strata = value_noise(in.world_pos.xz * vec2f(0.3, 0.02));
     let detail = value_noise(in.world_pos.xz * 0.25);
     let base_rock = vec3f(0.30, 0.26, 0.22);
     let light_rock = vec3f(0.42, 0.38, 0.32);
-    var color = mix(base_rock, light_rock, rock_n * 0.6 + strata * 0.3);
-    color *= (0.85 + detail * 0.3);
+    var u_color = mix(base_rock, light_rock, rock_n * 0.6 + strata * 0.3);
+    u_color *= (0.85 + detail * 0.3);
 
-    // Simple lighting with vertex normal
     let N = normalize(in.smooth_normal);
     let NdotL = dot(N, normalize(SUN_DIR));
     let wrapped = saturate((NdotL + 0.4) / 1.4);
-    let lit = color * mix(vec3f(0.08, 0.10, 0.14), SUN_COLOR * 0.55, wrapped);
+    let lit = u_color * mix(vec3f(0.08, 0.10, 0.14), SUN_COLOR * 0.55, wrapped);
 
-    // Atmospheric fog (same as terrain)
     let view_dist = length(in.world_pos - u.eye_pos);
     let view_to_frag = normalize(in.world_pos - u.eye_pos);
     let fog_amount = 1.0 - exp(-view_dist * FOG_DENSITY);

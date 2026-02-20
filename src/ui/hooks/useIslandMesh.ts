@@ -1,24 +1,25 @@
 import { useRef, useEffect, type RefObject } from 'react';
 import { HexData, PlanarAlignment, PlanarOverlay, WorldGenConfig } from '../../core/types';
 import { WORLD, getTerrainRenderParams } from '../../core/config';
-import type { Scene, IslandCompute, TerrainMesh, TerrainGridData } from '../../gpu';
+import type { Scene, IslandClassify, TerrainGridData } from '../../gpu';
 import { buildIslandMesh } from '../../gpu';
+import type { IslandMesh } from './useGpuResources';
 
 export function useIslandMesh(
   planarOverlays: PlanarOverlay[],
   worldConfig: WorldGenConfig,
   hexes: HexData[],
   sceneRef: RefObject<Scene | null>,
-  islandComputeRef: RefObject<IslandCompute | null>,
-  islandTopMeshRef: RefObject<TerrainMesh | null>,
-  islandUnderMeshRef: RefObject<TerrainMesh | null>,
+  islandClassifyRef: RefObject<IslandClassify | null>,
+  islandTopMeshRef: RefObject<IslandMesh | null>,
+  islandUnderMeshRef: RefObject<IslandMesh | null>,
   terrainGridRef: RefObject<TerrainGridData | null>,
 ) {
   const islandKeyRef = useRef('');
 
   useEffect(() => {
     const scene = sceneRef.current;
-    const ic = islandComputeRef.current;
+    const ic = islandClassifyRef.current;
     const topMesh = islandTopMeshRef.current;
     const underMesh = islandUnderMeshRef.current;
     const grid = terrainGridRef.current;
@@ -51,22 +52,17 @@ export function useIslandMesh(
     }
     islandKeyRef.current = key;
 
-    const cfg = worldConfig;
-    const { seaLevel, landRange, heightScale } = getTerrainRenderParams(cfg);
+    const { seaLevel, landRange, heightScale } = getTerrainRenderParams(worldConfig);
     let cancelled = false;
 
     requestIdleCallback(() => {
       if (cancelled) return;
-      ic.classify(
-        grid.positions,
-        grid.cols * grid.rows,
-        WORLD.HEX_SIZE,
-        WORLD.GRID_RADIUS,
-        heightScale,
-        seaLevel,
-      ).then(classifyData => {
+      ic.readback().then(readbackData => {
         if (cancelled) return;
-        const result = buildIslandMesh(classifyData, grid, { seaLevel, landRange, heightScale });
+        const result = buildIslandMesh(
+          readbackData, hexes, grid, WORLD.HEX_SIZE,
+          { seaLevel, landRange, heightScale },
+        );
         if (!result) {
           islandTop.visible = false;
           islandUnder.visible = false;

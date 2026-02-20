@@ -63,9 +63,11 @@ export class Scene {
   // Depth/stencil
   private depthTexture: GPUTexture | null = null;
 
-  // Hex state texture reference (for group 0 rebuild)
+  // Texture references (for group 0 rebuild)
   private hexStateTexture: GPUTexture | null = null;
+  private islandTexture: GPUTexture | null = null;
   private dummyHexTexture: GPUTexture;
+  private dummyIslandTexture: GPUTexture;
 
   private constructor(
     device: GPUDevice,
@@ -77,6 +79,7 @@ export class Scene {
     objectUniformBuffer: GPUBuffer,
     objectBindGroup: GPUBindGroup,
     dummyHexTexture: GPUTexture,
+    dummyIslandTexture: GPUTexture,
   ) {
     this.device = device;
     this.context = context;
@@ -87,6 +90,7 @@ export class Scene {
     this.objectUniformBuffer = objectUniformBuffer;
     this.objectBindGroup = objectBindGroup;
     this.dummyHexTexture = dummyHexTexture;
+    this.dummyIslandTexture = dummyIslandTexture;
 
     this.objectStagingBuffer = new ArrayBuffer(MAX_OBJECT_SLOTS * OBJECT_UNIFORM_SLOT);
     this.objectStagingF32 = new Float32Array(this.objectStagingBuffer);
@@ -99,7 +103,7 @@ export class Scene {
     if (!context) throw new Error('Failed to get WebGPU canvas context');
     context.configure({ device, format, alphaMode: 'opaque' });
 
-    // Group 0: per-frame shared (uniforms + hex state texture)
+    // Group 0: per-frame shared (uniforms + hex state texture + island texture)
     const group0Layout = device.createBindGroupLayout({
       entries: [
         {
@@ -109,6 +113,11 @@ export class Scene {
         },
         {
           binding: 1,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float', viewDimension: '2d' },
+        },
+        {
+          binding: 2,
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           texture: { sampleType: 'float', viewDimension: '2d' },
         },
@@ -142,7 +151,7 @@ export class Scene {
       }],
     });
 
-    // Dummy 1×1 texture for initial group 0 bind group
+    // Dummy 1×1 textures for initial group 0 bind group
     const dummyHexTexture = device.createTexture({
       size: [1, 1],
       format: 'rgba8unorm',
@@ -155,11 +164,23 @@ export class Scene {
       [1, 1],
     );
 
+    const dummyIslandTexture = device.createTexture({
+      size: [1, 1],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    device.queue.writeTexture(
+      { texture: dummyIslandTexture },
+      new Uint8Array([0, 0, 0, 0]),
+      { bytesPerRow: 4 },
+      [1, 1],
+    );
+
     return new Scene(
       device, context, format,
       group0Layout, group1Layout,
       frameUniformBuffer, objectUniformBuffer, objectBindGroup,
-      dummyHexTexture,
+      dummyHexTexture, dummyIslandTexture,
     );
   }
 
@@ -205,13 +226,20 @@ export class Scene {
     this.rebuildGroup0();
   }
 
+  setIslandTexture(texture: GPUTexture): void {
+    this.islandTexture = texture;
+    this.rebuildGroup0();
+  }
+
   private rebuildGroup0(): void {
     const hexTex = this.hexStateTexture ?? this.dummyHexTexture;
+    const islandTex = this.islandTexture ?? this.dummyIslandTexture;
     this.group0BindGroup = this.device.createBindGroup({
       layout: this.group0Layout,
       entries: [
         { binding: 0, resource: { buffer: this.frameUniformBuffer } },
         { binding: 1, resource: hexTex.createView() },
+        { binding: 2, resource: islandTex.createView() },
       ],
     });
   }
@@ -381,5 +409,6 @@ export class Scene {
     this.objectUniformBuffer.destroy();
     this.depthTexture?.destroy();
     this.dummyHexTexture.destroy();
+    this.dummyIslandTexture.destroy();
   }
 }

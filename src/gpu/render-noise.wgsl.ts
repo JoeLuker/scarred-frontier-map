@@ -3,7 +3,7 @@
  * Single source of truth for: hash2, gradient_noise (aliased as value_noise),
  * fbm3, pixel_to_hex, lookup_hex_state, and packed channel decode.
  *
- * Used by terrain-renderer.ts (vertex+fragment) and island-compute.ts (compute).
+ * Used by terrain-renderer.ts (vertex+fragment).
  * INTENTIONALLY DIFFERENT from terrain-noise.wgsl.ts (which mirrors core/noise.ts
  * for deterministic terrain generation). These use fast vec2->float hashing for
  * real-time visual detail.
@@ -19,7 +19,7 @@ export function createRenderNoiseWGSL(): string {
   return /* wgsl */ `
 // ============================================================
 // Shared render-time noise + hex utilities
-// (single source of truth — terrain-renderer.ts + island-compute.ts)
+// (single source of truth — terrain-renderer.ts)
 // ============================================================
 
 const SQRT3: f32 = 1.7320508075688772;
@@ -52,6 +52,9 @@ const AIR_MAX_LIFT_FRACTION: f32 = ${PLANAR.AIR.MAX_LIFT_FRACTION};
 const AIR_SMOOTH_MEDIAN: f32 = ${PLANAR.AIR.SMOOTH_MEDIAN};
 const AIR_SMOOTH_FACTOR: f32 = ${PLANAR.AIR.SMOOTH_FACTOR};
 const AIR_GOUGE_DEPTH: f32 = ${PLANAR.AIR.GOUGE_DEPTH};
+const AIR_UNDERSIDE_THICKNESS: f32 = ${PLANAR.AIR.UNDERSIDE_THICKNESS};
+const AIR_UNDERSIDE_STALACTITE: f32 = ${PLANAR.AIR.UNDERSIDE_STALACTITE};
+const AIR_UNDERSIDE_MAX_DIST: f32 = ${PLANAR.AIR.UNDERSIDE_MAX_DIST}.0;
 
 const POSITIVE_NOISE_FREQ: f32 = ${PLANAR.POSITIVE.NOISE_FREQ};
 const POSITIVE_UPLIFT_AMP: f32 = ${PLANAR.POSITIVE.UPLIFT_AMP};

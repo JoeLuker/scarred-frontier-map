@@ -102,13 +102,15 @@ export const HexGrid: React.FC<HexGridProps> = ({
   // --- Terrain mesh rebuild on config change ---
   useTerrainMesh(worldConfig, gpu.mesh, gpu.meshCompute, gpu.terrainGrid, gpu.meshConfig);
 
-  // --- Hex state texture sync ---
-  useHexStateSync(hexes, gpu.hexState, gpu.hexStateSource);
+  // --- Hex state texture sync + island classify ---
+  useHexStateSync(hexes, gpu.hexState, gpu.hexStateSource, gpu.islandClassify);
 
-  // --- Island mesh rebuild on Air overlay changes ---
+  // --- Island mesh rebuild on overlay/config changes ---
   useIslandMesh(
     planarOverlays, worldConfig, hexes,
-    gpu.scene, gpu.islandCompute, gpu.islandTopMesh, gpu.islandUnderMesh, gpu.terrainGrid,
+    gpu.scene, gpu.islandClassify,
+    gpu.islandTopMesh, gpu.islandUnderMesh,
+    gpu.terrainGrid,
   );
 
   // --- Sync refs + rebuild lookup map when hexes change ---
