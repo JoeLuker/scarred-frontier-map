@@ -173,8 +173,10 @@ export function useAirMesh(
       if (!scene) return;
       const top = scene.getObject('island-top');
       const under = scene.getObject('island-under');
+      const tornado = scene.getObject('tornado');
       if (top) top.visible = true;
       if (under) under.visible = true;
+      if (tornado) tornado.visible = true;
     },
 
     fullKey: (overlays, wc) =>
