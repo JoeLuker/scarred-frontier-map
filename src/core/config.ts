@@ -40,8 +40,8 @@ export const PLANAR_DEFAULTS: Record<PlanarAlignment, {
   readonly lift: number;
 }> = {
   [PlanarAlignment.MATERIAL]:  { intensity: 1.0, falloff: 3.0, radius: 5, fragmentation: 0.5, lift: 0.5 },
-  [PlanarAlignment.FIRE]:      { intensity: 0.9, falloff: 4.0, radius: 5, fragmentation: 0.5, lift: 0.5 },
-  [PlanarAlignment.WATER]:     { intensity: 0.7, falloff: 1.5, radius: 8, fragmentation: 0.5, lift: 0.5 },
+  [PlanarAlignment.FIRE]:      { intensity: 0.9, falloff: 4.0, radius: 5, fragmentation: 0.6, lift: 0.4 },
+  [PlanarAlignment.WATER]:     { intensity: 0.7, falloff: 1.5, radius: 8, fragmentation: 0.5, lift: 0.3 },
   [PlanarAlignment.AIR]:       { intensity: 0.6, falloff: 1.0, radius: 10, fragmentation: 0.5, lift: 0.5 },
   [PlanarAlignment.EARTH]:     { intensity: 0.8, falloff: 3.0, radius: 6, fragmentation: 0.5, lift: 0.5 },
   [PlanarAlignment.POSITIVE]:  { intensity: 0.7, falloff: 2.0, radius: 7, fragmentation: 0.5, lift: 0.5 },
@@ -166,8 +166,8 @@ export const BIOME = {
 // These values are injected into WGSL as named constants via render-noise.wgsl.ts.
 
 export const PLANAR = {
-  FIRE: { CONTRAST_CENTER: 0.35, CONTRAST_SCALE: 0.02, JAG_FREQ: 0.12, JAG_AMP: 0.008 },
-  WATER: { FLOOD_NORM: 0.08, FLATTEN_FACTOR: 0.6 },
+  FIRE: { CONTRAST_CENTER: 0.35, CONTRAST_SCALE: 0.02, JAG_FREQ: 0.12, JAG_AMP: 0.008, LAVA_RANGE: 0.25 },
+  WATER: { FLOOD_RANGE: 0.25 },
   EARTH: { NOISE_FREQ: 0.05, UPLIFT_AMP: 0.015, QUANTIZE_BANDS: 4 },
   AIR: {
     BASE_FREQ: 0.003, FRAG_EXPONENT: 8.0, DETAIL_FREQ_MUL: 3.75,
@@ -182,6 +182,24 @@ export const PLANAR = {
   POSITIVE: { NOISE_FREQ: 0.04, UPLIFT_AMP: 0.005 },
   NEGATIVE: { PEAK_SINK: 0.02, BASE_SINK: 0.005 },
   SCAR: { NOISE_FREQ: 0.06, DISPLACEMENT_AMP: 0.012 },
+  TORNADO: {
+    RINGS: 16,               // Vertical rings per funnel
+    SEGMENTS: 20,            // Vertices per ring (circumference resolution)
+    GOUGE_DEPTH: -0.005,     // Ground depression level (fraction of heightScale)
+    TWIST_SPEED: 0.45,       // Base angular speed (rad/s) — slow, ominous rotation
+    RADIUS_FRACTION: 0.8,    // Tornado base radius = island footprint radius × this
+  },
+  LAVA: {
+    RIPPLE_FREQ: 0.03,       // Frequency of animated surface ripple noise
+    RIPPLE_AMP: 0.002,       // Amplitude of surface ripple (fraction of heightScale)
+  },
+  PLUME: {
+    RINGS: 18,               // Vertical rings per plume column
+    SEGMENTS: 20,            // Vertices per ring (circumference resolution)
+    HEIGHT_FACTOR: 3.0,      // Plume height = baseRadius × this × volcanism
+    TWIST_SPEED: 0.20,       // Base angular speed (rad/s) — slow, lazy rotation
+    RADIUS_FRACTION: 0.6,    // Plume base radius = lava footprint radius × this
+  },
 } as const;
 
 // --- Noise / Planar Edge Constants ---
@@ -243,6 +261,7 @@ export const CAMERA = {
   ZOOM_MAX: 15000,
   ZOOM_FACTOR: 1.08,
   DRAG_THRESHOLD: 5,
+  ELEVATION_MIN: 0.02,            // ~1° above horizon — allows looking up at island undersides
 } as const;
 
 // --- Derived Terrain Render Params (single source of truth) ---

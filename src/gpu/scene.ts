@@ -258,6 +258,7 @@ export class Scene {
     hexGridOpacity: number,
     terrainColors: Float32Array,
     eyePos: readonly [number, number, number],
+    time: number,
   ): void {
     const data = new Float32Array(UNIFORM_SIZE / 4);
     data.set(viewProj, 0);
@@ -271,7 +272,7 @@ export class Scene {
     data[23] = moistureForest;
     data[24] = moistureMarsh;
     data[25] = hexGridOpacity;
-    data[26] = 0;
+    data[26] = time;
     data[27] = 0;
     data.set(terrainColors.subarray(0, 44), 28);
     data[72] = eyePos[0];

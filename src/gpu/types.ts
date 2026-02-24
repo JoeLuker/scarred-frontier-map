@@ -74,6 +74,8 @@ export const OBJECT_FLAGS = {
   IS_SEA: 0x02,
   IS_ISLAND_DRAW: 0x04,
   IS_ISLAND_UNDER: 0x08,
+  IS_TORNADO: 0x10,
+  IS_PLUME: 0x20,
 } as const;
 
 // --- GPU context ---
@@ -95,3 +97,9 @@ export const MESH_VERTEX_BYTE_STRIDE = MESH_VERTEX_STRIDE * 4;
 // correct terrain elevation for biome logic (snow line, rock blend) unaffected by island height.
 export const ISLAND_VERTEX_STRIDE = 8;
 export const ISLAND_VERTEX_BYTE_STRIDE = ISLAND_VERTEX_STRIDE * 4;
+
+// --- Tornado mesh vertex data layout ---
+// Each vertex: center_xz(2) + worldY(1) + localAngle(1) + localRadius(1) + heightFrac(1) + twistSpeed(1) + opacityBase(1) = 8 floats = 32 bytes
+// Center and angle define the parametric funnel; VS applies twist + wobble at runtime.
+export const TORNADO_VERTEX_STRIDE = 8;
+export const TORNADO_VERTEX_BYTE_STRIDE = TORNADO_VERTEX_STRIDE * 4;

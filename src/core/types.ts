@@ -84,6 +84,7 @@ export interface HexData {
   planarIntensity: number;
   planarFragmentation: number;  // 0-1, chunk noise frequency from dominant overlay
   planarLift: number;           // 0-1, island lift height from dominant overlay
+  planarRadius: number;         // hex radius of dominant overlay (for GPU noise scaling)
   planarInfluences: PlanarInfluence[];
   reactionEmission: PlanarAlignment | null;
 }

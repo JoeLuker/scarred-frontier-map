@@ -63,6 +63,7 @@ function stalactiteNoise(x: number, z: number): number {
 export interface IslandMeshResult {
   readonly top: MeshBuffers;
   readonly underside: MeshBuffers;
+  readonly bottomYGrid: Float32Array;
 }
 
 export interface IslandRenderParams {
@@ -543,5 +544,6 @@ export function buildIslandMesh(
       vertexCount: totalUnderVerts,
       indexCount: totalUnderIndices,
     },
+    bottomYGrid,
   };
 }

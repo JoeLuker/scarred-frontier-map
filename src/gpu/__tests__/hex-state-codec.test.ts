@@ -1,30 +1,30 @@
 import { describe, it, expect } from 'vitest';
 import { encodeR, encodeG, encodeB, encodeA, decodeA } from '../hex-state-codec';
 
-describe('R channel (lift, full byte)', () => {
-  it('encodes 0.0 as 0', () => {
+describe('R channel (overlay radius, 0-71 hex → 0-255)', () => {
+  it('encodes radius 0 as 0', () => {
     expect(encodeR(0)).toBe(0);
   });
 
-  it('encodes 1.0 as 255', () => {
-    expect(encodeR(1.0)).toBe(255);
+  it('encodes max radius 71 as 255', () => {
+    expect(encodeR(71)).toBe(255);
   });
 
-  it('encodes 0.5 as ~128', () => {
-    expect(encodeR(0.5)).toBe(128);
+  it('encodes radius 10 as ~36', () => {
+    expect(encodeR(10)).toBe(Math.round(10 * 255 / 71));
   });
 
   it('clamps above 255', () => {
-    expect(encodeR(2.0)).toBe(255);
+    expect(encodeR(100)).toBe(255);
   });
 
-  it('has 256-level precision', () => {
-    // Every integer 0-255 is reachable
-    const seen = new Set<number>();
-    for (let i = 0; i <= 255; i++) {
-      seen.add(encodeR(i / 255));
+  it('monotonically increases with radius', () => {
+    let prev = -1;
+    for (let r = 0; r <= 71; r++) {
+      const v = encodeR(r);
+      expect(v).toBeGreaterThanOrEqual(prev);
+      prev = v;
     }
-    expect(seen.size).toBe(256);
   });
 });
 

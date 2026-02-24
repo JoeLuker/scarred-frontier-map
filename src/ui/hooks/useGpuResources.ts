@@ -9,6 +9,8 @@ import {
   createSeaMaterial,
   createSkyMaterial,
   createIslandMaterial,
+  createTornadoMaterial,
+  createPlumeMaterial,
   TerrainMesh,
   buildTerrainMesh,
   HexStateTexture,
@@ -20,10 +22,11 @@ import {
 import type { TerrainGridData, MeshBuffers } from '../../gpu';
 
 /**
- * GPU buffer pair for island meshes (8-float vertex layout).
- * Separate from TerrainMesh because stride differs (32 vs 28 bytes).
+ * GPU buffer pair for overlay-driven meshes (islands, tornadoes, lava, etc).
+ * Generic: any MeshBuffers can be uploaded. Separate from TerrainMesh because
+ * overlay meshes use a different stride (32 vs 28 bytes).
  */
-export class IslandMesh {
+export class OverlayMesh {
   private device: GPUDevice;
   private _vertexBuffer: GPUBuffer;
   private _indexBuffer: GPUBuffer;
@@ -86,8 +89,10 @@ export function useGpuResources(
   const hexStateRef = useRef<HexStateTexture | null>(null);
   const meshComputeRef = useRef<MeshCompute | null>(null);
   const islandClassifyRef = useRef<IslandClassify | null>(null);
-  const islandTopMeshRef = useRef<IslandMesh | null>(null);
-  const islandUnderMeshRef = useRef<IslandMesh | null>(null);
+  const islandTopMeshRef = useRef<OverlayMesh | null>(null);
+  const islandUnderMeshRef = useRef<OverlayMesh | null>(null);
+  const tornadoMeshRef = useRef<OverlayMesh | null>(null);
+  const plumeMeshRef = useRef<OverlayMesh | null>(null);
   const seaBufferRef = useRef<GPUBuffer | null>(null);
   const terrainGridRef = useRef<TerrainGridData | null>(null);
   const meshConfigRef = useRef<WorldGenConfig | null>(null);
@@ -109,12 +114,20 @@ export function useGpuResources(
         const shader = device.createShaderModule({ code: createTerrainShader() });
         const terrainMat = createTerrainMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
         const islandMat = createIslandMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
+        const tornadoMat = createTornadoMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
+        const plumeMat = createPlumeMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
         const seaMat = createSeaMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
         const skyMat = createSkyMaterial(device, shader, scene.format, scene.group0Layout);
 
         // Island mesh buffers (dedicated 8-float vertex layout)
-        const islandTopMesh = new IslandMesh(device, 50000);
-        const islandUnderMesh = new IslandMesh(device, 50000);
+        const islandTopMesh = new OverlayMesh(device, 50000);
+        const islandUnderMesh = new OverlayMesh(device, 50000);
+
+        // Tornado mesh buffers (same 32-byte stride as island)
+        const tornadoMesh = new OverlayMesh(device, 10000);
+
+        // Volcanic plume mesh buffers (8-float tornado vertex layout)
+        const plumeMesh = new OverlayMesh(device, 10000);
 
         // Sea quad vertex buffer (7 floats/vert: pos_xz, elevation, moisture, normal)
         const SEA_EXTENT = 100000;
@@ -160,6 +173,22 @@ export function useGpuResources(
           renderOrder: 3,
           visible: false,
         });
+        scene.addObject('tornado', {
+          material: tornadoMat,
+          mesh: tornadoMesh,
+          flags: OBJECT_FLAGS.IS_TORNADO,
+          stencilRef: 1,
+          renderOrder: 3.5,
+          visible: false,
+        });
+        scene.addObject('plume', {
+          material: plumeMat,
+          mesh: plumeMesh,
+          flags: OBJECT_FLAGS.IS_PLUME,
+          stencilRef: 1,
+          renderOrder: 3.6,
+          visible: false,
+        });
         scene.addObject('sea', {
           material: seaMat,
           mesh: { vertexBuffer: seaBuffer, vertexCount: 6 },
@@ -174,6 +203,8 @@ export function useGpuResources(
         meshComputeRef.current = mc;
         islandTopMeshRef.current = islandTopMesh;
         islandUnderMeshRef.current = islandUnderMesh;
+        tornadoMeshRef.current = tornadoMesh;
+        plumeMeshRef.current = plumeMesh;
         seaBufferRef.current = seaBuffer;
 
         // Build initial mesh + hex state
@@ -217,6 +248,10 @@ export function useGpuResources(
       islandTopMeshRef.current = null;
       islandUnderMeshRef.current?.destroy();
       islandUnderMeshRef.current = null;
+      tornadoMeshRef.current?.destroy();
+      tornadoMeshRef.current = null;
+      plumeMeshRef.current?.destroy();
+      plumeMeshRef.current = null;
       seaBufferRef.current?.destroy();
       seaBufferRef.current = null;
       terrainGridRef.current = null;
@@ -231,6 +266,8 @@ export function useGpuResources(
     islandClassify: islandClassifyRef,
     islandTopMesh: islandTopMeshRef,
     islandUnderMesh: islandUnderMeshRef,
+    tornadoMesh: tornadoMeshRef,
+    plumeMesh: plumeMeshRef,
     seaBuffer: seaBufferRef,
     terrainGrid: terrainGridRef,
     meshConfig: meshConfigRef,

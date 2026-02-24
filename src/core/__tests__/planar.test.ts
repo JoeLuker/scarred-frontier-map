@@ -107,6 +107,7 @@ describe('computeHexState', () => {
     planarIntensity: 0,
     planarFragmentation: 0.5,
     planarLift: 0.5,
+    planarRadius: 0,
     planarInfluences: [],
     reactionEmission: null,
   });

@@ -108,7 +108,7 @@ export const useCamera = (
     } else {
       // Two-finger scroll = orbit (deltaX → azimuth, deltaY → elevation)
       cam.azimuth -= e.deltaX * CAMERA.ORBIT_SPEED * 0.3;
-      cam.elevation = Math.max(0.1, Math.min(Math.PI / 2 - 0.01,
+      cam.elevation = Math.max(CAMERA.ELEVATION_MIN, Math.min(Math.PI / 2 - 0.01,
         cam.elevation + e.deltaY * CAMERA.ORBIT_SPEED * 0.3));
     }
   };

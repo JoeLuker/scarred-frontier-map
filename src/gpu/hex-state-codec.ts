@@ -2,7 +2,11 @@
  * Hex state RGBA8 packing codec — single source of truth for encode/decode.
  *
  * Channel layout:
- *   R = lift (full byte, 256 levels: 0.0-1.0 → 0-255)
+ *   R = plane-dependent data:
+ *       Air:   overlay radius (0-71 hex range → 0-255, for island noise frequency scaling)
+ *       Fire:  lift (0.0-1.0 → 0-255, lava level threshold for VS terrain clamping)
+ *       Water: lift (0.0-1.0 → 0-255, flood level threshold for VS terrain clamping)
+ *       Other: overlay radius (default)
  *   G = packed: plane_type (3 bits high, bits 7-5) + fragmentation (5 bits low, bits 4-0)
  *   B = planar intensity (0.0-1.0 → 0-255)
  *   A = packed: terrain_id (high nibble, bits 7-4) + sector boundary (bit 0)
@@ -10,9 +14,17 @@
  * Used by hex-state-texture.ts (encode) and WGSL shaders (decode via render-noise.wgsl.ts).
  */
 
-// --- R channel: lift (full byte, 256 levels) ---
+// --- R channel: plane-dependent (radius OR lift) ---
 
-export function encodeR(lift: number): number {
+const MAX_RADIUS = 71; // GRID_RADIUS(66) + 5
+
+/** Encode overlay radius in R channel (Air, default) */
+export function encodeR(radius: number): number {
+  return Math.min(255, Math.round(radius * (255 / MAX_RADIUS)));
+}
+
+/** Encode lift (0-1) in R channel (Fire — lava level threshold) */
+export function encodeRLift(lift: number): number {
   return Math.min(255, Math.round(lift * 255));
 }
 

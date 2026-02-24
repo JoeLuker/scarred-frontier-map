@@ -21,7 +21,7 @@ struct Uniforms {
   moisture_forest: f32,             // 92
   moisture_marsh: f32,              // 96
   hex_grid_opacity: f32,            // 100
-  _pad0: f32,                       // 104
+  time: f32,                        // 104
   _pad1: f32,                       // 108
   terrain_colors: array<vec4f, 11>, // 112-287 (8 base + 3 mutation-only)
   eye_pos: vec3f,                   // 288-299
@@ -36,7 +36,7 @@ struct Uniforms {
 // Per-object configuration (scene graph — identity model for terrain/sea)
 struct ObjectConfig {
   model: mat4x4f,   // 64 bytes — world transform
-  flags: u32,       // 4 bytes  — bit 0: IS_TERRAIN, bit 1: IS_SEA, bit 2: IS_ISLAND_DRAW, bit 3: IS_ISLAND_UNDER
+  flags: u32,       // 4 bytes  — bit flags: IS_TERRAIN(0x01), IS_SEA(0x02), IS_ISLAND_DRAW(0x04), IS_ISLAND_UNDER(0x08), IS_TORNADO(0x10), IS_PLUME(0x20)
   _pad0: u32,
   _pad1: u32,
   _pad2: u32,       // total: 80 bytes (16-byte aligned)
@@ -87,8 +87,11 @@ fn vs_main(in: VertexIn) -> VertexOut {
     y = displacement_curve(norm_elev) * hs;
   }
 
-  // island_mask: 0 = ground, 1 = floating island (set in Air branch only).
+  // island_mask: 0 = ground, 1 = clamped surface (Air islands, Fire lava, Water flood).
   var island_mask: f32 = 0.0;
+  // Elevation output — normally passes through raw terrain elevation.
+  // Water flood branch overrides to sea level so FS water system sees submersion.
+  var out_elev = in.elevation;
 
   // Planar vertex displacement — terrain-aware reshaping via hex_state_tex.
   // Each plane reshapes terrain with geological purpose, not random noise.
@@ -103,15 +106,42 @@ fn vs_main(in: VertexIn) -> VertexOut {
   if (vt_plane == 1u) {
     // FIRE: amplify terrain contrast — valleys deepen into lava channels,
     // ridges sharpen into volcanic peaks. Noise adds jagged texture.
-    let contrast = (norm_elev - FIRE_CONTRAST_CENTER) * FIRE_CONTRAST_SCALE;
-    let jag = (value_noise(in.pos_xz * FIRE_JAG_FREQ) - 0.5) * FIRE_JAG_AMP;
+    // Volcanism (fragmentation) scales the reshaping: dormant barely moves, erupting is dramatic.
+    let volcanism = vt_packed_g.fragmentation;
+    let contrast = (norm_elev - FIRE_CONTRAST_CENTER) * FIRE_CONTRAST_SCALE * (0.3 + volcanism * 0.7);
+    let jag = (value_noise(in.pos_xz * FIRE_JAG_FREQ) - 0.5) * FIRE_JAG_AMP * (0.5 + volcanism * 0.5);
     y += (contrast + jag) * vt_pi * hs;
 
+    // Lava pool clamping: terrain below lava threshold rises to lava surface.
+    // R channel = lift (0-1) for Fire hexes, scaled by FIRE_LAVA_RANGE so lava
+    // stays in valleys (cubic displacement compresses low elevations dramatically).
+    let lift = vt_state.r;
+    if (lift > 0.002) {
+      let lava_norm = lift * FIRE_LAVA_RANGE;
+      var lava_y = displacement_curve(lava_norm) * hs;
+      // Apply same Fire displacement so lava surface tracks the reshaped terrain
+      let lava_contrast = (lava_norm - FIRE_CONTRAST_CENTER) * FIRE_CONTRAST_SCALE * (0.3 + volcanism * 0.7);
+      let lava_jag = (value_noise(in.pos_xz * FIRE_JAG_FREQ) - 0.5) * FIRE_JAG_AMP * (0.5 + volcanism * 0.5);
+      lava_y += (lava_contrast + lava_jag) * vt_pi * hs;
+
+      if (y < lava_y) {
+        y = lava_y;
+        island_mask = 1.0; // Signal to FS: lava surface → full molten material
+      }
+    }
+
   } else if (vt_plane == 2u) {
-    // WATER: flatten toward flood level — terrain pulled toward a plane
-    // just above sea. Low areas rise slightly, high areas are pulled down.
-    let flood_y = displacement_curve(WATER_FLOOD_NORM) * hs;
-    y = mix(y, flood_y, vt_pi * WATER_FLATTEN_FACTOR);
+    // WATER: flood — vertices below flood level become water, above are untouched.
+    let flood_lift = vt_state.r;  // R channel = lift for Water hexes
+    if (flood_lift > 0.002) {
+      let flood_norm = flood_lift * WATER_FLOOD_RANGE;
+      let flood_y = displacement_curve(flood_norm) * hs;
+      if (y < flood_y) {
+        y = 0.0;
+        island_mask = 1.0;
+        out_elev = min(out_elev, sea);
+      }
+    }
 
   } else if (vt_plane == 3u) {
     // EARTH: tectonic uplift — strong blocky displacement.
@@ -170,9 +200,11 @@ fn vs_main(in: VertexIn) -> VertexOut {
   var out: VertexOut;
   out.clip_pos = clip;
   out.world_pos = world;
-  out.elevation = in.elevation;
+  out.elevation = out_elev;
   out.moisture = in.moisture;
-  out.smooth_normal = in.normal;
+  // Lava/flood-clamped vertices get flat-up normal (smooth pool surface).
+  out.smooth_normal = select(in.normal, vec3f(0.0, 1.0, 0.0),
+    island_mask > 0.5 && (vt_plane == 1u || vt_plane == 2u));
   out.island_mask = island_mask;
   return out;
 }
@@ -214,6 +246,211 @@ const PI: f32 = 3.14159265359;
 ` + createRenderNoiseWGSL() + `
 
 // ============================================================
+// Tornado vertex shader — noise-displaced funnel with time-driven twist
+//
+// Techniques from stylized VFX breakdowns:
+//   - Noise-based vertex displacement along radial normal
+//   - Angled UV scrolling for spiral appearance
+//   - Per-shell variation via twist_speed and opacity_base
+// ============================================================
+
+struct VertexTornadoIn {
+  @location(0) center_xz: vec2f,
+  @location(1) world_y: f32,
+  @location(2) local_angle: f32,
+  @location(3) local_radius: f32,
+  @location(4) height_frac: f32,
+  @location(5) twist_speed: f32,
+  @location(6) opacity_base: f32,
+}
+
+struct VertexTornadoOut {
+  @builtin(position) clip_pos: vec4f,
+  @location(0) world_pos: vec3f,
+  @location(1) height_frac: f32,
+  @location(2) spiral_uv: vec2f,
+  @location(3) radial_dir: vec2f,
+  @location(4) opacity_base: f32,
+}
+
+@vertex
+fn vs_tornado(in: VertexTornadoIn) -> VertexTornadoOut {
+  let hf = in.height_frac;
+
+  // Twist: slow ominous rotation, faster toward bottom
+  let twist = in.local_angle + u.time * in.twist_speed * (1.0 + hf * 0.8);
+
+  // Cone taper: wide cloud wall at top, narrows to 15% at ground
+  let profile = mix(1.0, 0.15, hf);
+  let base_r = in.local_radius * profile;
+
+  // Spiral UV: angle-based U scrolls with twist, height-based V scrolls upward.
+  // The 45-degree diagonal scroll creates the classic tornado spiral pattern.
+  let spiral_u = twist / 6.2831853 + u.time * 0.08;
+  let spiral_v = hf * 4.0 - u.time * 0.15;
+
+  // Noise-based vertex displacement along radial normal.
+  // Two octaves at different frequencies for turbulent chunky surface.
+  let displ1 = value_noise(vec2f(spiral_u * 5.0, spiral_v * 3.0));
+  let displ2 = value_noise(vec2f(spiral_u * 11.0 + 3.7, spiral_v * 7.0 + 1.3));
+  let displacement = (displ1 * 0.65 + displ2 * 0.35 - 0.5) * 2.0;
+  let displ_strength = base_r * 0.35 * (0.4 + hf * 0.6);
+  let r = base_r + displacement * displ_strength;
+
+  // Slow large-scale wobble — the whole column sways gently
+  let wobble_x = value_noise(vec2f(hf * 1.5 + u.time * 0.12, 0.0)) - 0.5;
+  let wobble_z = value_noise(vec2f(0.0, hf * 1.5 + u.time * 0.10)) - 0.5;
+  let wobble_amp = base_r * 0.15 * hf;
+
+  let cos_t = cos(twist);
+  let sin_t = sin(twist);
+  let wx = in.center_xz.x + cos_t * r + wobble_x * wobble_amp;
+  let wz = in.center_xz.y + sin_t * r + wobble_z * wobble_amp;
+  let world = vec3f(wx, in.world_y, wz);
+
+  var out: VertexTornadoOut;
+  out.clip_pos = u.view_proj * vec4f(world, 1.0);
+  out.world_pos = world;
+  out.height_frac = hf;
+  out.spiral_uv = vec2f(spiral_u, spiral_v);
+  out.radial_dir = vec2f(cos_t, sin_t);
+  out.opacity_base = in.opacity_base;
+  return out;
+}
+
+// ============================================================
+// Tornado fragment shader — alpha-clipped swirling cloud material
+//
+// Techniques from stylized VFX breakdowns:
+//   - Scrolling noise sampled at spiral UVs → alpha clip for hard cloud edges
+//   - Fresnel fade to hide cylindrical mesh silhouette
+//   - Two-tone color banding for storm cloud depth
+//   - Tip/top fades for natural attachment and dissipation
+// ============================================================
+
+@fragment
+fn fs_tornado(in: VertexTornadoOut) -> @location(0) vec4f {
+  // --- Alpha clip from spiral noise ---
+  // Two noise octaves at different scales create turbulent cloud holes.
+  // The spiral_uv already scrolls diagonally (set in VS), so the pattern
+  // naturally swirls around the funnel.
+  let n1 = value_noise(in.spiral_uv * vec2f(3.0, 2.5));
+  let n2 = value_noise(in.spiral_uv * vec2f(7.0, 5.0) + vec2f(0.5, 0.3));
+  let cloud_noise = n1 * 0.6 + n2 * 0.4;
+
+  // --- Fresnel fade: hide the cylindrical mesh edge ---
+  let view_dir = normalize(u.eye_pos - in.world_pos);
+  let radial_normal = normalize(vec3f(in.radial_dir.x, 0.0, in.radial_dir.y));
+  let ndotv = abs(dot(view_dir, radial_normal));
+  // Invert: 1 at center, fades to 0 at grazing angle (power 2 for broader falloff)
+  let fresnel = pow(ndotv, 2.0);
+
+  // --- Height fades ---
+  let tip_fade = 1.0 - smoothstep(0.8, 1.0, in.height_frac);
+  let top_fade = smoothstep(0.0, 0.06, in.height_frac);
+
+  // Combined alpha before clip
+  let raw_alpha = in.opacity_base * cloud_noise * fresnel * tip_fade * top_fade;
+
+  // Hard alpha clip — creates swirling cloud edges instead of ghostly transparency
+  if (raw_alpha < 0.08) {
+    discard;
+  }
+
+  // --- Color: stormy two-tone with noise banding ---
+  let dark = vec3f(0.38, 0.38, 0.42);
+  let light = vec3f(0.65, 0.63, 0.60);
+  // Step the noise into broad bands for stylized look
+  let band_t = smoothstep(0.35, 0.65, cloud_noise);
+  var color = mix(dark, light, band_t);
+
+  // Slight height gradient: darker at top (storm base), dustier at bottom
+  color = mix(color, vec3f(0.55, 0.50, 0.45), in.height_frac * 0.25);
+
+  // Brighten edges slightly (rim light from sky)
+  let rim = (1.0 - fresnel) * 0.15;
+  color += vec3f(rim);
+
+  return vec4f(color, raw_alpha);
+}
+
+// ============================================================
+// Plume vertex shader — billowing volcanic smoke column
+// Reuses tornado vertex layout (VertexTornadoIn): center_xz, world_y, angle, radius, hf, twist, opacity
+// ============================================================
+
+@vertex
+fn vs_plume(in: VertexTornadoIn) -> VertexTornadoOut {
+  let hf = in.height_frac;
+
+  // Lazy upward drift rotation (much slower than tornado)
+  let twist = in.local_angle + u.time * in.twist_speed * (1.0 + hf * 0.3);
+
+  // Radius is pre-baked with inverted profile (narrow base → wide top)
+  let base_r = in.local_radius;
+
+  // Billowing displacement — stronger at top
+  let spiral_u = twist / 6.2831853 + u.time * 0.03;
+  let spiral_v = hf * 3.0 - u.time * 0.05;
+  let displ = value_noise(vec2f(spiral_u * 4.0, spiral_v * 2.5));
+  let displ_str = base_r * 0.4 * hf;
+  let r = base_r + (displ - 0.5) * 2.0 * displ_str;
+
+  let cos_t = cos(twist);
+  let sin_t = sin(twist);
+  let wx = in.center_xz.x + cos_t * r;
+  let wz = in.center_xz.y + sin_t * r;
+  let world = vec3f(wx, in.world_y, wz);
+
+  var out: VertexTornadoOut;
+  out.clip_pos = u.view_proj * vec4f(world, 1.0);
+  out.world_pos = world;
+  out.height_frac = hf;
+  out.spiral_uv = vec2f(spiral_u, spiral_v);
+  out.radial_dir = vec2f(cos_t, sin_t);
+  out.opacity_base = in.opacity_base;
+  return out;
+}
+
+// ============================================================
+// Plume fragment shader — dark volcanic smoke with embers + heat glow
+// ============================================================
+
+@fragment
+fn fs_plume(in: VertexTornadoOut) -> @location(0) vec4f {
+  let hf = in.height_frac;
+
+  // Volumetric smoke noise — alpha clip for hard cloud edges
+  let n1 = value_noise(in.spiral_uv * vec2f(3.0, 2.0));
+  let n2 = value_noise(in.spiral_uv * vec2f(6.0, 4.0) + vec2f(1.0, 2.0));
+  let cloud_noise = n1 * 0.65 + n2 * 0.35;
+
+  // Fresnel fade (hide mesh silhouette at edges)
+  let view_dir = normalize(u.eye_pos - in.world_pos);
+  let radial_normal = normalize(vec3f(in.radial_dir.x, 0.0, in.radial_dir.y));
+  let ndotv = abs(dot(view_dir, radial_normal));
+  let fresnel = pow(ndotv, 1.5);
+
+  // Alpha: cloud density + fresnel + base fade
+  let base_fade = smoothstep(0.0, 0.08, hf);    // fade in at vent
+  let top_fade = 1.0 - smoothstep(0.85, 1.0, hf); // fade out at top
+  let raw_alpha = cloud_noise * fresnel * base_fade * top_fade * in.opacity_base;
+  if (raw_alpha < 0.06) { discard; }
+
+  // Color: dark ash at top, hot orange glow near base
+  let ash = vec3f(0.15, 0.12, 0.10);
+  let hot_smoke = vec3f(0.4, 0.15, 0.05);
+  let base_glow = vec3f(0.8, 0.2, 0.02) * (1.0 - smoothstep(0.0, 0.25, hf));
+  let color = mix(hot_smoke, ash, smoothstep(0.15, 0.6, hf));
+
+  // Embedded ember sparks — bright orange dots
+  let ember_n = value_noise(in.world_pos.xz * 0.3 + vec2f(u.time * 0.5, -u.time * 0.8));
+  let ember = step(0.92, ember_n) * vec3f(2.0, 0.8, 0.1) * (1.0 - hf);
+
+  return vec4f(color + base_glow + ember, raw_alpha);
+}
+
+// ============================================================
 // Lighting constants
 // ============================================================
 
@@ -244,7 +481,7 @@ struct PlanarMaterial {
   specular_mod: f32,
 }
 
-fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, sea: f32, island_mask: f32, obj_flags: u32) -> PlanarMaterial {
+fn get_planar_material(plane_type: u32, intensity: f32, fragmentation: f32, wp: vec3f, elev: f32, sea: f32, island_mask: f32, obj_flags: u32) -> PlanarMaterial {
   var pm: PlanarMaterial;
   pm.normal_offset = vec3f(0.0);
   pm.replace_color = vec3f(0.5);
@@ -271,54 +508,60 @@ fn get_planar_material(plane_type: u32, intensity: f32, wp: vec3f, elev: f32, se
     // ── FIRE: Volcanic transformation ──
     // Valleys become lava channels, highlands become basalt/obsidian.
     // Cracks glow with molten rock. Snow is annihilated.
+    // Volcanism (fragmentation) scales crack width and glow intensity.
+    // island_mask = 1.0 for lava-clamped vertices (VS raised terrain to lava level).
+    let volcanism = fragmentation;
+    let lava_mask = island_mask; // 1.0 = lava surface (clamped by VS), 0.0 = above-lava terrain
+
     let n1 = (value_noise(wn * 0.15) - 0.5) * 2.0;
     let n2 = (value_noise(wn * 0.3 + vec2f(7.0, 13.0)) - 0.5) * 2.0;
-    pm.normal_offset = vec3f(n1, 0.0, n2) * pi * 0.5;
+    // Lava surface has no normal perturbation (flat pool)
+    pm.normal_offset = vec3f(n1, 0.0, n2) * pi * 0.5 * (1.0 - lava_mask);
 
-    // Valleys: dark lava rock. Peaks: lighter basalt with oxidation
+    // Animated lava flow direction — scrolls with time
+    let flow = wn * 0.2 + vec2f(u.time * 0.005, u.time * 0.003);
+
+    // Voronoi crack network — shared by terrain and lava, just scaled differently
+    let vor_f = voronoi(flow);
+    let crack_width = mix(0.02, 0.15, volcanism);
+    let crack = 1.0 - smoothstep(crack_width * 0.2, crack_width, vor_f.y - vor_f.x);
+
+    // Above-lava terrain: basalt/obsidian with volcanic cracks
     let lava_rock = vec3f(0.12, 0.06, 0.03);
     let basalt = vec3f(0.32, 0.25, 0.22);
     let obsidian_n = value_noise(wn * 0.08);
-    let surface = mix(lava_rock, basalt, is_high) * (0.7 + obsidian_n * 0.6);
-    pm.replace_color = surface;
-    pm.replace_strength = pi * 0.85;
+    let terrain_surface = mix(lava_rock, basalt, is_high) * (0.7 + obsidian_n * 0.6);
 
-    // Lava glow in cracks — stronger in valleys where lava pools
-    let vor_f = voronoi(wn * 0.2);
-    let crack = 1.0 - smoothstep(0.02, 0.12, vor_f.y - vor_f.x);
-    let lava_glow = vec3f(1.5, 0.4, 0.05) * crack * (0.4 + is_low * 0.6);
-    // Broad volcanic heat haze
-    let heat = vec3f(0.8, 0.25, 0.05) * is_low * 0.3;
-    pm.emission = (lava_glow + heat) * pi;
+    // Lava surface: dark cooling crust
+    let lava_crust = vec3f(0.08, 0.04, 0.02);
+    pm.replace_color = mix(terrain_surface, lava_crust, lava_mask);
+    // Full replacement on lava surface, partial on above-lava terrain
+    pm.replace_strength = pi * (0.4 + volcanism * 0.45) * (1.0 - lava_mask) + lava_mask;
 
-    pm.roughness_mod = -0.3 * pi;     // glassy lava
+    // Lava glow: much stronger on lava surface than on terrain cracks
+    let terrain_glow = vec3f(1.5, 0.4, 0.05) * crack * (0.2 + volcanism * 0.8) * (0.4 + is_low * 0.6);
+    // Lava surface: animated molten glow through crust cracks
+    let glow_n = value_noise(flow * 3.0) * 0.6 + value_noise(flow * 7.0 + vec2f(3.0, 5.0)) * 0.4;
+    let molten_core = vec3f(3.0, 1.2, 0.15);
+    let molten_edge = vec3f(1.8, 0.3, 0.02);
+    let molten = mix(molten_edge, molten_core, glow_n * crack);
+    let lava_emission = molten * crack * 0.9 + vec3f(0.3, 0.05, 0.0) * glow_n * 0.3;
+
+    let heat = vec3f(0.8, 0.25, 0.05) * is_low * 0.3 * volcanism;
+    pm.emission = mix(terrain_glow + heat, lava_emission, lava_mask) * pi;
+
+    pm.roughness_mod = mix(-0.3 * pi, -0.5, lava_mask);  // lava surface is very glassy
     pm.snow_line_shift = 1.0 * pi;    // melt ALL snow
     pm.rock_blend_mod = 0.6 * pi;     // everything is rock
-    pm.ambient_mod = 1.0 + 0.3 * pi;  // self-lit volcanic glow
-    pm.shadow_mod = mix(1.0, 0.6, pi);
-    pm.specular_mod = 1.0 + 0.8 * pi; // glassy lava reflections
+    pm.ambient_mod = 1.0 + mix(0.3 * pi, 0.8, lava_mask); // lava surface is self-lit
+    pm.shadow_mod = mix(mix(1.0, 0.6, pi), 0.3, lava_mask); // lava surface ignores shadow
+    pm.specular_mod = 1.0 + mix(0.8 * pi, 1.5, lava_mask); // lava surface very reflective
 
   } else if (plane_type == 2u) {
-    // ── WATER: Flooding ──
-    // Low areas become standing water. High areas get wet/muddy.
-    // Terrain is saturated and darkened.
-    let w1 = (value_noise(wn * 0.04) - 0.5);
-    let w2 = (value_noise(wn * 0.06 + vec2f(20.0, 40.0)) - 0.5);
-    pm.normal_offset = vec3f(w1 * is_low, 0.0, w2 * is_low) * pi * 0.2;
-
-    // Valleys: actual water surface. Highlands: wet mud/dark earth
-    let water_surface = vec3f(0.08, 0.18, 0.35);
-    let wet_mud = vec3f(0.25, 0.22, 0.15);
-    let depth_n = value_noise(wn * 0.012) * 0.15;
-    let surface = mix(wet_mud, water_surface + depth_n, is_low);
-    pm.replace_color = surface;
-    pm.replace_strength = pi * 0.8;
-
-    pm.roughness_mod = mix(-0.2, -0.5, is_low) * pi; // pools are mirror-smooth
-    pm.snow_line_shift = -0.15 * pi;
-    pm.moisture_mod = 0.5 * pi;
-    pm.ambient_mod = mix(1.0, 0.8, pi);   // darker overall
-    pm.specular_mod = 1.0 + 2.0 * is_low * pi; // wet sheen in pools
+    // ── WATER: Flooding — identity material ──
+    // VS clamps terrain below flood level and routes it to the water path.
+    // No material modifications — flooded hexes ARE water, above-flood hexes
+    // are unmodified terrain. The water rendering system handles everything.
 
   } else if (plane_type == 3u) {
     // ── EARTH: Tectonic uplift ──
@@ -535,7 +778,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     fs_island_mask = smoothstep(0.15, 0.5, fs_island_data.b);
   }
 
-  let pm = get_planar_material(plane_type, p_intensity, in.world_pos, in.elevation, sea, fs_island_mask, obj.flags);
+  let pm = get_planar_material(plane_type, p_intensity, fs_packed_g.fragmentation, in.world_pos, in.elevation, sea, fs_island_mask, obj.flags);
 
   // Curvature approximation — must be in uniform control flow (before any
   // non-uniform branching) since dpdx/dpdy require all quad invocations active.
@@ -586,9 +829,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     return vec4f(clamp(final_color, vec3f(0.0), vec3f(1.0)), 1.0);
   }
 
-  // Beyond the hex grid: force water rendering (deep ocean).
-  // The sea quad mesh goes through this same shader — no separate sea pipeline.
-  if (is_beyond_grid) {
+  // Force water rendering: deep ocean beyond grid, or flood-clamped Water vertices.
+  if (is_beyond_grid || (in.island_mask > 0.5 && plane_type == 2u)) {
     is_water = true;
   }
 

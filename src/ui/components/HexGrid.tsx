@@ -8,7 +8,8 @@ import { useCamera } from '../hooks/useCamera';
 import { useGpuResources } from '../hooks/useGpuResources';
 import { useTerrainMesh } from '../hooks/useTerrainMesh';
 import { useHexStateSync } from '../hooks/useHexStateSync';
-import { useIslandMesh } from '../hooks/useIslandMesh';
+import { useAirMesh } from '../hooks/useAirMesh';
+import { useFireMesh } from '../hooks/useFireMesh';
 import {
   computeDisplacedY,
   worldToScreen,
@@ -105,12 +106,20 @@ export const HexGrid: React.FC<HexGridProps> = ({
   // --- Hex state texture sync + island classify ---
   useHexStateSync(hexes, gpu.hexState, gpu.hexStateSource, gpu.islandClassify);
 
-  // --- Island mesh rebuild on overlay/config changes ---
-  useIslandMesh(
+  // --- Air overlay meshes (islands + tornadoes) ---
+  useAirMesh(
     planarOverlays, worldConfig, hexes,
     gpu.scene, gpu.islandClassify,
     gpu.islandTopMesh, gpu.islandUnderMesh,
+    gpu.tornadoMesh,
     gpu.terrainGrid,
+  );
+
+  // --- Fire overlay meshes (volcanic plumes) ---
+  useFireMesh(
+    planarOverlays, worldConfig, hexes,
+    gpu.scene,
+    gpu.plumeMesh,
   );
 
   // --- Sync refs + rebuild lookup map when hexes change ---
@@ -338,6 +347,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
       showGridRef.current ? MESH.HEX_GRID_OPACITY : 0,
       GPU_TERRAIN_COLORS,
       eyePos,
+      performance.now() / 1000,
     );
 
     scene.render();

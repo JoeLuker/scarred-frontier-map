@@ -2,7 +2,7 @@ import { HexData, PlanarAlignment } from '../core/types';
 import { getSectorID } from '../core/geometry';
 import { WORLD } from '../core/config';
 import { TERRAIN_TYPE_TO_ID } from './types';
-import { encodeR, encodeG, encodeB, encodeA } from './hex-state-codec';
+import { encodeR, encodeRLift, encodeG, encodeB, encodeA } from './hex-state-codec';
 
 // Plane type → integer ID (0-7)
 const PLANE_TYPE_ID: Record<string, number> = {
@@ -84,12 +84,12 @@ export class HexStateTexture {
 
       const off = (ty * size + tx) * 4;
 
-      // R = lift (full byte, 256 levels)
-      data[off] = encodeR(hex.planarLift);
+      // R = plane-dependent: Fire/Water → lift (lava/flood level), others → overlay radius
+      const planeId = PLANE_TYPE_ID[hex.planarAlignment] ?? 0;
+      data[off] = (planeId === 1 || planeId === 2) ? encodeRLift(hex.planarLift) : encodeR(hex.planarRadius);
 
       // G = plane_type (3 bits high) + fragmentation (5 bits low), B = intensity
       if (hex.planarInfluences.length > 0) {
-        const planeId = PLANE_TYPE_ID[hex.planarAlignment] ?? 0;
         data[off + 1] = encodeG(planeId, hex.planarFragmentation);
         data[off + 2] = encodeB(hex.planarIntensity);
       }

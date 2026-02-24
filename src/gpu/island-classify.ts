@@ -77,7 +77,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       noise_val = 1.0;
     } else {
 
-    let base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag);
+    // Scale frequency inversely with overlay radius so larger overlays
+    // produce larger landmasses instead of uniform speckle.
+    // Reference: radius=10 → scale=1.0 (matches original behavior).
+    let radius_hex = state.r * 71.0;
+    let radius_scale = 10.0 / max(radius_hex, 2.0);
+    let base_freq = AIR_BASE_FREQ * pow(AIR_FRAG_EXPONENT, frag) * radius_scale;
     let detail_freq = base_freq * AIR_DETAIL_FREQ_MUL;
     let detail_w = AIR_CHUNK_BLEND_DETAIL * frag;
     let fbm_w = 1.0 - detail_w;
