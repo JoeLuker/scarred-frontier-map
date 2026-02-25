@@ -6,14 +6,15 @@ export { TerrainMesh, buildTerrainMesh, computeDisplacedY } from './terrain-mesh
 export { HexStateTexture } from './hex-state-texture';
 export { TerrainCompute, GpuTerrainProvider } from './terrain-compute';
 export { MeshCompute } from './mesh-compute';
+export { OverlayMesh } from './overlay-mesh';
 export { IslandClassify } from './island-classify';
 export { buildIslandMesh } from './island-mesh';
 export { buildTornadoMesh } from './tornado-mesh';
 export type { TornadoDescriptor } from './tornado-mesh';
 export { buildPlumeMesh } from './plume-mesh';
 export type { PlumeDescriptor } from './plume-mesh';
-export { getViewProjection, screenToGround, worldToScreen, getEyePosition } from './camera';
-export type { OrbitalCamera } from './camera';
+export { getViewProjection, screenToGround, worldToScreen, getEyePosition } from '../core/camera';
+export type { OrbitalCamera } from '../core/camera';
 export { TERRAIN_ORDER, OBJECT_FLAGS, SCENE_OBJECTS, ISLAND_VERTEX_BYTE_STRIDE } from './types';
 export type { MeshBuffers, TerrainGridData } from './terrain-mesh';
 export type { IslandReadbackData } from './island-classify';

@@ -17,7 +17,7 @@ import { computeDisplacedY } from '../../gpu/terrain-mesh';
 import type { Scene } from '../../gpu';
 import { buildPlumeMesh, SCENE_OBJECTS } from '../../gpu';
 import type { PlumeDescriptor } from '../../gpu';
-import type { OverlayMesh } from './useGpuResources';
+import type { OverlayMesh } from '../../gpu';
 import { useOverlayMesh, type OverlayMeshConfig } from './useOverlayMesh';
 
 /**

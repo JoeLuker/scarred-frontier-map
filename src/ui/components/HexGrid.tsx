@@ -3,7 +3,7 @@ import { HexData, PlanarOverlay, WorldGenConfig } from '../../core/types';
 import { WORLD, TERRAIN, CAMERA, MESH, getTerrainRenderParams } from '../../core/config';
 import { TERRAIN_COLORS, PLANAR_COLORS } from '../theme';
 import { hexToPixel, pixelToHex, hexKey } from '../../core/geometry';
-import { hexToRgb } from './renderUtils';
+import { hexToRgb } from '../utils/hex';
 import { useCamera } from '../hooks/useCamera';
 import { useGpuResources } from '../hooks/useGpuResources';
 import { useTerrainMesh } from '../hooks/useTerrainMesh';

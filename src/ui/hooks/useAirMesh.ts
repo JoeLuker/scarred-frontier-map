@@ -15,7 +15,7 @@ import { hexToPixel } from '../../core/geometry';
 import type { Scene, IslandClassify, TerrainGridData } from '../../gpu';
 import { buildIslandMesh, buildTornadoMesh, SCENE_OBJECTS } from '../../gpu';
 import type { TornadoDescriptor, IslandReadbackData } from '../../gpu';
-import type { OverlayMesh } from './useGpuResources';
+import type { OverlayMesh } from '../../gpu';
 import { useOverlayMesh, type OverlayMeshConfig } from './useOverlayMesh';
 
 /**

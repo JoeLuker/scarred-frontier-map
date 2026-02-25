@@ -21,7 +21,7 @@ import {
   extractIsoband, resolveVert, getEdgeEndpoints, getCrossingInfo,
   MS_TRIS, MS_WALLS,
   type IsobandResult,
-} from './marching-squares';
+} from '../core/marching-squares';
 import { pixelToHex, hexKey } from '../core/geometry';
 import { PLANAR } from '../core/config';
 import type { HexData, PlanarAlignment } from '../core/types';
