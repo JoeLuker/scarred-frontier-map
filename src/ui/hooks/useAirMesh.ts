@@ -12,10 +12,8 @@ import { useMemo, type RefObject } from 'react';
 import { HexData, PlanarAlignment, PlanarOverlay, WorldGenConfig } from '../../core/types';
 import { WORLD, PLANAR, getTerrainRenderParams } from '../../core/config';
 import { hexToPixel } from '../../core/geometry';
-import type { Scene, IslandClassify, TerrainGridData } from '../../gpu';
+import type { Scene, IslandClassify, TerrainGridData, TornadoDescriptor, IslandReadbackData, OverlayMesh } from '../../gpu';
 import { buildIslandMesh, buildTornadoMesh, SCENE_OBJECTS } from '../../gpu';
-import type { TornadoDescriptor, IslandReadbackData } from '../../gpu';
-import type { OverlayMesh } from '../../gpu';
 import { useOverlayMesh, type OverlayMeshConfig } from './useOverlayMesh';
 
 /**

@@ -14,10 +14,8 @@ import { HexData, PlanarAlignment, PlanarOverlay, WorldGenConfig } from '../../c
 import { WORLD, PLANAR, getTerrainRenderParams } from '../../core/config';
 import { hexToPixel } from '../../core/geometry';
 import { computeDisplacedY } from '../../gpu/terrain-mesh';
-import type { Scene } from '../../gpu';
+import type { Scene, PlumeDescriptor, OverlayMesh } from '../../gpu';
 import { buildPlumeMesh, SCENE_OBJECTS } from '../../gpu';
-import type { PlumeDescriptor } from '../../gpu';
-import type { OverlayMesh } from '../../gpu';
 import { useOverlayMesh, type OverlayMeshConfig } from './useOverlayMesh';
 
 /**

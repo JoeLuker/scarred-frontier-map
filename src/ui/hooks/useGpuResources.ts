@@ -16,12 +16,12 @@ import {
   HexStateTexture,
   MeshCompute,
   IslandClassify,
+  OverlayMesh,
   OBJECT_FLAGS,
   SCENE_OBJECTS,
   ISLAND_VERTEX_BYTE_STRIDE,
 } from '../../gpu';
 import type { TerrainGridData } from '../../gpu';
-import { OverlayMesh } from '../../gpu';
 
 export function useGpuResources(
   gpuCanvasRef: RefObject<HTMLCanvasElement | null>,
