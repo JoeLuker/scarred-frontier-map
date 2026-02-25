@@ -15,7 +15,7 @@ import { WORLD, PLANAR, getTerrainRenderParams } from '../../core/config';
 import { hexToPixel } from '../../core/geometry';
 import { computeDisplacedY } from '../../gpu/terrain-mesh';
 import type { Scene } from '../../gpu';
-import { buildPlumeMesh } from '../../gpu';
+import { buildPlumeMesh, SCENE_OBJECTS } from '../../gpu';
 import type { PlumeDescriptor } from '../../gpu';
 import type { OverlayMesh } from './useGpuResources';
 import { useOverlayMesh, type OverlayMeshConfig } from './useOverlayMesh';
@@ -76,7 +76,7 @@ export function useFireMesh(
     isReady: () => !!(
       sceneRef.current &&
       plumeMeshRef.current &&
-      sceneRef.current.getObject('plume')
+      sceneRef.current.getObject(SCENE_OBJECTS.PLUME)
     ),
 
     readback: () => Promise.resolve(null),
@@ -84,7 +84,7 @@ export function useFireMesh(
     buildAndUpload: (_readback, overlays, wc) => {
       const pMesh = plumeMeshRef.current!;
       const scene = sceneRef.current!;
-      const plumeObj = scene.getObject('plume');
+      const plumeObj = scene.getObject(SCENE_OBJECTS.PLUME);
       if (!pMesh || !plumeObj) return;
 
       const { heightScale } = getTerrainRenderParams(wc);
@@ -107,14 +107,14 @@ export function useFireMesh(
     hide: () => {
       const scene = sceneRef.current;
       if (!scene) return;
-      const plume = scene.getObject('plume');
+      const plume = scene.getObject(SCENE_OBJECTS.PLUME);
       if (plume) plume.visible = false;
     },
 
     show: () => {
       const scene = sceneRef.current;
       if (!scene) return;
-      const plume = scene.getObject('plume');
+      const plume = scene.getObject(SCENE_OBJECTS.PLUME);
       if (plume) plume.visible = true;
     },
 

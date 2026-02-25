@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { resolveChemistry, computeHexState } from '../planar';
-import { TerrainType, PlanarAlignment, PlanarInfluence, ChemistryRule, HexData, PlanarOverlay } from '../types';
+import { TerrainType, TerrainElement, PlanarAlignment, PlanarInfluence, ChemistryRule, HexData, PlanarOverlay } from '../types';
 import { CHEMISTRY_RULES } from '../config';
 
 // --- resolveChemistry ---
@@ -92,17 +92,16 @@ describe('resolveChemistry', () => {
 
 describe('computeHexState', () => {
   const makeHex = (q: number, r: number, terrain = TerrainType.PLAIN): HexData => ({
+    id: `hex-${q}-${r}`,
+    groupId: 'SECTOR-0_0',
     coordinates: { q, r },
     terrain,
+    element: TerrainElement.STANDARD,
     baseTerrain: terrain,
     description: `${terrain} hex`,
     baseDescription: `${terrain} hex`,
+    notes: '',
     elevation: 0.5,
-    moisture: 0.5,
-    elements: [],
-    explored: true,
-    visible: true,
-    flavor: undefined,
     planarAlignment: PlanarAlignment.MATERIAL,
     planarIntensity: 0,
     planarFragmentation: 0.5,

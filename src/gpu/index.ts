@@ -14,6 +14,6 @@ export { buildPlumeMesh } from './plume-mesh';
 export type { PlumeDescriptor } from './plume-mesh';
 export { getViewProjection, screenToGround, worldToScreen, getEyePosition } from './camera';
 export type { OrbitalCamera } from './camera';
-export { TERRAIN_ORDER, OBJECT_FLAGS, ISLAND_VERTEX_BYTE_STRIDE } from './types';
+export { TERRAIN_ORDER, OBJECT_FLAGS, SCENE_OBJECTS, ISLAND_VERTEX_BYTE_STRIDE } from './types';
 export type { MeshBuffers, TerrainGridData } from './terrain-mesh';
 export type { IslandReadbackData } from './island-classify';

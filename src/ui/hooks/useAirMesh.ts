@@ -13,7 +13,7 @@ import { HexData, PlanarAlignment, PlanarOverlay, WorldGenConfig } from '../../c
 import { WORLD, PLANAR, getTerrainRenderParams } from '../../core/config';
 import { hexToPixel } from '../../core/geometry';
 import type { Scene, IslandClassify, TerrainGridData } from '../../gpu';
-import { buildIslandMesh, buildTornadoMesh } from '../../gpu';
+import { buildIslandMesh, buildTornadoMesh, SCENE_OBJECTS } from '../../gpu';
 import type { TornadoDescriptor, IslandReadbackData } from '../../gpu';
 import type { OverlayMesh } from './useGpuResources';
 import { useOverlayMesh, type OverlayMeshConfig } from './useOverlayMesh';
@@ -109,8 +109,8 @@ export function useAirMesh(
       islandTopMeshRef.current &&
       islandUnderMeshRef.current &&
       terrainGridRef.current &&
-      sceneRef.current.getObject('island-top') &&
-      sceneRef.current.getObject('island-under')
+      sceneRef.current.getObject(SCENE_OBJECTS.ISLAND_TOP) &&
+      sceneRef.current.getObject(SCENE_OBJECTS.ISLAND_UNDER)
     ),
 
     readback: () => islandClassifyRef.current!.readback(),
@@ -125,9 +125,9 @@ export function useAirMesh(
       const renderParams = { seaLevel, landRange, heightScale };
 
       const result = buildIslandMesh(readbackData, hx, grid, WORLD.HEX_SIZE, renderParams);
-      const islandTop = scene.getObject('island-top')!;
-      const islandUnder = scene.getObject('island-under')!;
-      const tornadoObj = scene.getObject('tornado');
+      const islandTop = scene.getObject(SCENE_OBJECTS.ISLAND_TOP)!;
+      const islandUnder = scene.getObject(SCENE_OBJECTS.ISLAND_UNDER)!;
+      const tornadoObj = scene.getObject(SCENE_OBJECTS.TORNADO);
 
       if (!result) {
         islandTop.visible = false;
@@ -160,9 +160,9 @@ export function useAirMesh(
     hide: () => {
       const scene = sceneRef.current;
       if (!scene) return;
-      const top = scene.getObject('island-top');
-      const under = scene.getObject('island-under');
-      const tornado = scene.getObject('tornado');
+      const top = scene.getObject(SCENE_OBJECTS.ISLAND_TOP);
+      const under = scene.getObject(SCENE_OBJECTS.ISLAND_UNDER);
+      const tornado = scene.getObject(SCENE_OBJECTS.TORNADO);
       if (top) top.visible = false;
       if (under) under.visible = false;
       if (tornado) tornado.visible = false;
@@ -171,9 +171,9 @@ export function useAirMesh(
     show: () => {
       const scene = sceneRef.current;
       if (!scene) return;
-      const top = scene.getObject('island-top');
-      const under = scene.getObject('island-under');
-      const tornado = scene.getObject('tornado');
+      const top = scene.getObject(SCENE_OBJECTS.ISLAND_TOP);
+      const under = scene.getObject(SCENE_OBJECTS.ISLAND_UNDER);
+      const tornado = scene.getObject(SCENE_OBJECTS.TORNADO);
       if (top) top.visible = true;
       if (under) under.visible = true;
       if (tornado) tornado.visible = true;

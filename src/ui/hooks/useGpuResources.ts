@@ -17,6 +17,7 @@ import {
   MeshCompute,
   IslandClassify,
   OBJECT_FLAGS,
+  SCENE_OBJECTS,
   ISLAND_VERTEX_BYTE_STRIDE,
 } from '../../gpu';
 import type { TerrainGridData, MeshBuffers } from '../../gpu';
@@ -154,7 +155,7 @@ export function useGpuResources(
           stencilRef: 1,
           renderOrder: 1,
         });
-        scene.addObject('island-top', {
+        scene.addObject(SCENE_OBJECTS.ISLAND_TOP, {
           material: islandMat,
           mesh: islandTopMesh,
           flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_DRAW,
@@ -162,7 +163,7 @@ export function useGpuResources(
           renderOrder: 2,
           visible: false,
         });
-        scene.addObject('island-under', {
+        scene.addObject(SCENE_OBJECTS.ISLAND_UNDER, {
           material: islandMat,
           mesh: islandUnderMesh,
           flags: OBJECT_FLAGS.IS_TERRAIN | OBJECT_FLAGS.IS_ISLAND_UNDER,
@@ -170,7 +171,7 @@ export function useGpuResources(
           renderOrder: 3,
           visible: false,
         });
-        scene.addObject('tornado', {
+        scene.addObject(SCENE_OBJECTS.TORNADO, {
           material: tornadoMat,
           mesh: tornadoMesh,
           flags: OBJECT_FLAGS.IS_TORNADO,
@@ -178,7 +179,7 @@ export function useGpuResources(
           renderOrder: 3.5,
           visible: false,
         });
-        scene.addObject('plume', {
+        scene.addObject(SCENE_OBJECTS.PLUME, {
           material: plumeMat,
           mesh: plumeMesh,
           flags: OBJECT_FLAGS.IS_PLUME,

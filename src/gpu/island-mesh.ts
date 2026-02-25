@@ -22,7 +22,7 @@ import {
   MS_TRIS, MS_WALLS,
   type IsobandResult,
 } from './marching-squares';
-import { pixelToHex } from '../core/geometry';
+import { pixelToHex, hexKey } from '../core/geometry';
 import { PLANAR } from '../core/config';
 import type { HexData, PlanarAlignment } from '../core/types';
 
@@ -262,7 +262,7 @@ export function buildIslandMesh(
   for (let i = 0; i < hexes.length; i++) {
     const h = hexes[i]!;
     if (h.planarAlignment !== AIR) continue;
-    hexMap.set(`${h.coordinates.q},${h.coordinates.r}`, {
+    hexMap.set(hexKey(h.coordinates.q, h.coordinates.r), {
       intensity: h.planarIntensity,
       lift: h.planarLift,
       frag: h.planarFragmentation,
@@ -279,7 +279,7 @@ export function buildIslandMesh(
     const z = positions[i * 2 + 1]!;
     if (x * x + z * z > cullRadius2) continue;
     const hex = pixelToHex(x, z, hexSize);
-    const hexData = hexMap.get(`${hex.q},${hex.r}`);
+    const hexData = hexMap.get(hexKey(hex.q, hex.r));
     if (!hexData) continue;
     vertIsland[i] = 1;
     vertIntensity[i] = hexData.intensity;
@@ -472,7 +472,7 @@ export function buildIslandMesh(
   // ── 6. Wall quads + combine underside ─────────────────────
 
   function getCrossData(qr: number, qc: number, localId: number): { x: number; z: number; topY: number; bottomY: number } {
-    const { edgeIdx, isHorizontal } = getCrossingInfo(iso, qr, qc, localId, cols);
+    const { edgeIdx, isHorizontal } = getCrossingInfo(iso!, qr, qc, localId, cols);
     const arr = isHorizontal ? hCrossData : vCrossData;
     const off = edgeIdx * 4;
     return { x: arr[off]!, z: arr[off + 1]!, topY: arr[off + 2]!, bottomY: arr[off + 3]! };

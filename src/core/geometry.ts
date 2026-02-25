@@ -1,5 +1,9 @@
 import { AxialCoord, PixelCoord } from './types';
 
+// --- Hex key (stable string for Map keys / lookups) ---
+
+export const hexKey = (q: number, r: number): string => `${q},${r}`;
+
 // --- Coordinate Systems ---
 
 /**

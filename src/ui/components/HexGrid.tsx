@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useCallback } from 'react';
 import { HexData, PlanarOverlay, WorldGenConfig } from '../../core/types';
 import { WORLD, TERRAIN, CAMERA, MESH, getTerrainRenderParams } from '../../core/config';
 import { TERRAIN_COLORS, PLANAR_COLORS } from '../theme';
-import { hexToPixel, pixelToHex } from '../../core/geometry';
+import { hexToPixel, pixelToHex, hexKey } from '../../core/geometry';
 import { hexToRgb } from './renderUtils';
 import { useCamera } from '../hooks/useCamera';
 import { useGpuResources } from '../hooks/useGpuResources';
@@ -125,7 +125,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
   // --- Sync refs + rebuild lookup map when hexes change ---
   useEffect(() => {
     hexesRef.current = hexes;
-    hexLookupRef.current = new Map(hexes.map((h, i) => [`${h.coordinates.q},${h.coordinates.r}`, i]));
+    hexLookupRef.current = new Map(hexes.map((h, i) => [hexKey(h.coordinates.q, h.coordinates.r), i]));
     hoveredHexIndexRef.current = -1;
   }, [hexes]);
   useEffect(() => {
@@ -163,7 +163,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
         const clickedOverlay = overlaysRef.current.find(o => {
           const pixel = hexToPixel(o.coordinates.q, o.coordinates.r, WORLD.HEX_SIZE);
-          const gIdx = hexLookupRef.current.get(`${o.coordinates.q},${o.coordinates.r}`);
+          const gIdx = hexLookupRef.current.get(hexKey(o.coordinates.q, o.coordinates.r));
           const gHex = gIdx !== undefined ? allHexes[gIdx] : undefined;
           const gY = gHex ? computeDisplacedY(gHex.elevation, seaLevel, landRange, heightScale) : 0;
           const screen = worldToScreen(pixel.x, gY, pixel.y, viewProj, rect.width, rect.height);
@@ -189,7 +189,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
         const target = overlaysRef.current.find(o => o.id === draggingOverlayIdRef.current);
         if (target) {
           // Raycast at the overlay's current terrain elevation for accurate placement
-          const gIdx = hexLookupRef.current.get(`${target.coordinates.q},${target.coordinates.r}`);
+          const gIdx = hexLookupRef.current.get(hexKey(target.coordinates.q, target.coordinates.r));
           const gHex = gIdx !== undefined ? hexesRef.current[gIdx] : undefined;
           const { seaLevel, landRange, heightScale } = getTerrainRenderParams(worldConfigRef.current);
           const planeY = gHex ? computeDisplacedY(gHex.elevation, seaLevel, landRange, heightScale) : 0;
@@ -215,7 +215,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
     // Initial hex from Y=0 raycast
     const hex0 = pixelToHex(result.worldX, result.worldY, WORLD.HEX_SIZE);
-    const idx0 = hexLookupRef.current.get(`${hex0.q},${hex0.r}`);
+    const idx0 = hexLookupRef.current.get(hexKey(hex0.q, hex0.r));
 
     // Refine: re-raycast at actual terrain elevation for accurate hit
     if (idx0 !== undefined) {
@@ -234,7 +234,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
           );
           if (refined) {
             const hexR = pixelToHex(refined.x, refined.z, WORLD.HEX_SIZE);
-            const idxR = hexLookupRef.current.get(`${hexR.q},${hexR.r}`);
+            const idxR = hexLookupRef.current.get(hexKey(hexR.q, hexR.r));
             hoveredHexIndexRef.current = idxR !== undefined ? idxR : -1;
             return;
           }
@@ -378,7 +378,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
       activeOverlays.forEach(overlay => {
         const op = hexToPixel(overlay.coordinates.q, overlay.coordinates.r, WORLD.HEX_SIZE);
         // Look up terrain elevation at gizmo position
-        const gizmoIdx = hexLookupRef.current.get(`${overlay.coordinates.q},${overlay.coordinates.r}`);
+        const gizmoIdx = hexLookupRef.current.get(hexKey(overlay.coordinates.q, overlay.coordinates.r));
         const gizmoHex = gizmoIdx !== undefined ? allHexes[gizmoIdx] : undefined;
         const gizmoY = gizmoHex
           ? computeDisplacedY(gizmoHex.elevation, seaLevel, landRange, heightScale)

@@ -67,6 +67,14 @@ export function flavorFromId(id: number): string {
   return FLAVOR_TABLE[id] ?? 'Wilderness';
 }
 
+// --- Scene object names (shared between useGpuResources, useAirMesh, useFireMesh) ---
+export const SCENE_OBJECTS = {
+  ISLAND_TOP: 'island-top',
+  ISLAND_UNDER: 'island-under',
+  TORNADO: 'tornado',
+  PLUME: 'plume',
+} as const;
+
 // --- Per-object shader flags (scene graph) ---
 // Bit flags passed via ObjectConfig uniform to differentiate render behavior.
 export const OBJECT_FLAGS = {

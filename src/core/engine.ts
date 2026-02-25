@@ -3,6 +3,7 @@ import { DEFAULT_WORLD_CONFIG, WORLD, PLANAR_DEFAULTS } from './config';
 import { applyAction, EMPTY_STATE } from './history';
 import { generateWorldGrid, mergeTerrain } from './world';
 import { applyOverlaysToMap } from './planar';
+import { hexKey } from './geometry';
 
 // --- TerrainProvider: dependency-inversion interface (no GPU imports in core) ---
 
@@ -76,7 +77,7 @@ export class WorldEngine {
   }
 
   private static _buildLookup(hexes: readonly HexData[]): Map<string, number> {
-    return new Map(hexes.map((hex, i) => [`${hex.coordinates.q},${hex.coordinates.r}`, i]));
+    return new Map(hexes.map((hex, i) => [hexKey(hex.coordinates.q, hex.coordinates.r), i]));
   }
 
   private _rebuildLookup(): void {
