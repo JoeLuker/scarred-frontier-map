@@ -33,10 +33,10 @@ export class OverlayMesh {
   private _vertexCount = 0;
   private _indexCount = 0;
 
-  constructor(device: GPUDevice, initialCapacity: number) {
+  constructor(device: GPUDevice, initialCapacity: number, byteStride: number) {
     this.device = device;
     this._vertexBuffer = device.createBuffer({
-      size: initialCapacity * ISLAND_VERTEX_BYTE_STRIDE,
+      size: initialCapacity * byteStride,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
     this._indexBuffer = device.createBuffer({
@@ -119,15 +119,12 @@ export function useGpuResources(
         const seaMat = createSeaMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
         const skyMat = createSkyMaterial(device, shader, scene.format, scene.group0Layout);
 
-        // Island mesh buffers (dedicated 8-float vertex layout)
-        const islandTopMesh = new OverlayMesh(device, 50000);
-        const islandUnderMesh = new OverlayMesh(device, 50000);
-
-        // Tornado mesh buffers (same 32-byte stride as island)
-        const tornadoMesh = new OverlayMesh(device, 10000);
-
-        // Volcanic plume mesh buffers (8-float tornado vertex layout)
-        const plumeMesh = new OverlayMesh(device, 10000);
+        // Overlay mesh buffers (all use 8-float / 32-byte vertex layouts)
+        const stride = ISLAND_VERTEX_BYTE_STRIDE;
+        const islandTopMesh = new OverlayMesh(device, 50000, stride);
+        const islandUnderMesh = new OverlayMesh(device, 50000, stride);
+        const tornadoMesh = new OverlayMesh(device, 10000, stride);
+        const plumeMesh = new OverlayMesh(device, 10000, stride);
 
         // Sea quad vertex buffer (7 floats/vert: pos_xz, elevation, moisture, normal)
         const SEA_EXTENT = 100000;

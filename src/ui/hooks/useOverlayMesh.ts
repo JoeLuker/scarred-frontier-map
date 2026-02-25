@@ -114,7 +114,8 @@ export function useOverlayMesh<TReadback>(
           guard.pending = null;
           fn();
         }
-      }).catch(() => {
+      }).catch((err) => {
+        console.warn('[useOverlayMesh] readback failed:', err);
         guard.busy = false;
         if (guard.pending) {
           const fn = guard.pending;

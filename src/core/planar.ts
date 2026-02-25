@@ -68,23 +68,14 @@ export const resolveChemistry = (
     for (const rule of rules) {
       if (rule.planes.length < 2) continue;
 
-      // All required planes must be in active set
-      let allPresent = true;
-      for (const p of rule.planes) {
-        if (!activePlanes.has(p)) { allPresent = false; break; }
-      }
-      if (!allPresent) continue;
+      if (!rule.planes.every(p => activePlanes.has(p))) continue;
 
       // Check terrain constraint (if specified)
       if (rule.terrain !== undefined && rule.terrain !== baseTerrain) continue;
 
       // Check min intensity on strongest required plane
       const minInt = rule.minIntensity ?? NOISE.INTENSITY_THRESHOLD;
-      let maxPlaneIntensity = 0;
-      for (const p of rule.planes) {
-        const pi = planeIntensities.get(p) ?? 0;
-        if (pi > maxPlaneIntensity) maxPlaneIntensity = pi;
-      }
+      const maxPlaneIntensity = Math.max(...rule.planes.map(p => planeIntensities.get(p) ?? 0));
       if (maxPlaneIntensity < minInt) continue;
 
       // Score: more planes = more specific; terrain constraint adds 1

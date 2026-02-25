@@ -76,12 +76,7 @@ export class WorldEngine {
   }
 
   private static _buildLookup(hexes: readonly HexData[]): Map<string, number> {
-    const map = new Map<string, number>();
-    for (let i = 0; i < hexes.length; i++) {
-      const hex = hexes[i]!;
-      map.set(`${hex.coordinates.q},${hex.coordinates.r}`, i);
-    }
-    return map;
+    return new Map(hexes.map((hex, i) => [`${hex.coordinates.q},${hex.coordinates.r}`, i]));
   }
 
   private _rebuildLookup(): void {

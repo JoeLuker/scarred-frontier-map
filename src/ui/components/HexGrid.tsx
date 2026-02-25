@@ -133,10 +133,12 @@ export const HexGrid: React.FC<HexGridProps> = ({
     hexLookupRef.current = lookup;
     hoveredHexIndexRef.current = -1;
   }, [hexes]);
-  useEffect(() => { overlaysRef.current = planarOverlays; }, [planarOverlays]);
-  useEffect(() => { worldConfigRef.current = worldConfig; }, [worldConfig]);
-  useEffect(() => { showGizmosRef.current = showGizmos; }, [showGizmos]);
-  useEffect(() => { showGridRef.current = showGrid; }, [showGrid]);
+  useEffect(() => {
+    overlaysRef.current = planarOverlays;
+    worldConfigRef.current = worldConfig;
+    showGizmosRef.current = showGizmos;
+    showGridRef.current = showGrid;
+  }, [planarOverlays, worldConfig, showGizmos, showGrid]);
 
   // --- Focus hex ---
   useEffect(() => {
