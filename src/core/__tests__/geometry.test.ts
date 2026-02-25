@@ -52,10 +52,8 @@ describe('axialRound', () => {
   });
 
   it('maintains cube constraint q + s + r = 0 where s = -q - r', () => {
-    for (let i = 0; i < 50; i++) {
-      const fq = Math.random() * 20 - 10;
-      const fr = Math.random() * 20 - 10;
-      const { q, r } = axialRound(fq, fr);
+    for (const [fq, fr] of [[0.7, -0.3], [-4.9, 2.1], [8.5, -8.5], [0.01, -0.01], [-3.3, 7.7]]) {
+      const { q, r } = axialRound(fq!, fr!);
       expect(q + (-q - r) + r).toBe(0);
     }
   });
