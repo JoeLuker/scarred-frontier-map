@@ -60,15 +60,3 @@ export const fbm = (
   return total / maxValue;
 };
 
-// Domain Warping (Inigo Quilez's standard recipe)
-// Offsets (5.2, 1.3, 1.7, 9.2, 8.3, 2.8) are Quilez's original decorrelation
-// constants, ensuring each FBM sample uses a distinct region of noise space.
-export const domainWarp = (x: number, y: number, seed: number): number => {
-  const qx = fbm(x + 0.0, y + 0.0, seed, 2);
-  const qy = fbm(x + 5.2, y + 1.3, seed, 2);
-
-  const rx = fbm(x + 4 * qx + 1.7, y + 4 * qy + 9.2, seed, 2);
-  const ry = fbm(x + 4 * qx + 8.3, y + 4 * qy + 2.8, seed, 2);
-
-  return fbm(x + 4 * rx, y + 4 * ry, seed, 4);
-};

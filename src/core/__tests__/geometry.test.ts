@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hexToPixel, pixelToHex, axialRound, getHexDistance, hexLine, getSectorID, getSectorCenter } from '../geometry';
+import { hexToPixel, pixelToHex, axialRound, getHexDistance, getSectorID, getSectorCenter } from '../geometry';
 
 describe('hexToPixel / pixelToHex round-trip', () => {
   const HEX_SIZE = 50;
@@ -81,36 +81,6 @@ describe('getHexDistance', () => {
     expect(getHexDistance({ q: 0, r: 0 }, { q: 5, r: 0 })).toBe(5);
     expect(getHexDistance({ q: 0, r: 0 }, { q: 3, r: 3 })).toBe(6);
     expect(getHexDistance({ q: -2, r: -3 }, { q: 2, r: 3 })).toBe(10);
-  });
-});
-
-describe('hexLine', () => {
-  it('returns empty for same start and end', () => {
-    expect(hexLine({ q: 3, r: 4 }, { q: 3, r: 4 })).toEqual([]);
-  });
-
-  it('returns empty for adjacent hexes', () => {
-    expect(hexLine({ q: 0, r: 0 }, { q: 1, r: 0 })).toEqual([]);
-  });
-
-  it('returns intermediate hexes for longer lines', () => {
-    const line = hexLine({ q: 0, r: 0 }, { q: 3, r: 0 });
-    expect(line.length).toBe(2);
-    expect(line[0]).toEqual({ q: 1, r: 0 });
-    expect(line[1]).toEqual({ q: 2, r: 0 });
-  });
-
-  it('all intermediate hexes are on the shortest path', () => {
-    const start = { q: -3, r: 5 };
-    const end = { q: 4, r: -2 };
-    const line = hexLine(start, end);
-    const totalDist = getHexDistance(start, end);
-
-    for (const hex of line) {
-      const toStart = getHexDistance(start, hex);
-      const toEnd = getHexDistance(hex, end);
-      expect(toStart + toEnd).toBe(totalDist);
-    }
   });
 });
 

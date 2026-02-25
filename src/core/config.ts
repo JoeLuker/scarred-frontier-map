@@ -219,32 +219,8 @@ export const MESH = {
   HEX_GRID_OPACITY: 0.15,    // Opacity of hex grid overlay lines
 } as const;
 
-// --- Render / LOD Constants ---
-
-export const RENDER = {
-  ZOOM_ICONS: 0.6,
-  ZOOM_COORDS: 1.5,
-  ZOOM_BEVEL: 0.4,
-  // 3D height
-  HEIGHT_SCALE: 120.0,           // Max height offset as fraction of HEX_SIZE
-  SIDE_DARKEN: 0.3,              // Side face color multiplier at cliff top
-  CLIFF_BASE_DARKEN: 0.12,       // Side face color multiplier at cliff base
-  BEVEL_INNER: 0.80,             // Bevel highlight starts at this distance from center
-  BEVEL_OUTER: 0.92,             // Bevel highlight ends at this distance
-  BEVEL_STRENGTH: 0.12,          // White highlight intensity
-
-  ZOOM_MIN: 0.05,
-  ZOOM_MAX: 3.0,
-  ZOOM_SCALE_FACTOR: 1.1,
-  DRAG_THRESHOLD: 5,
-  GIZMO_HIT_RADIUS_FACTOR: 1.5,
-  HEX_SQRT3: Math.sqrt(3),
-  ICON_SCALE_DIVISOR: 24,
-  ICON_SCALE_FACTOR: 0.5,
-  COORD_FONT_SCALE: 0.25,
-  COORD_OFFSET_SCALE: 0.6,
-  PLANAR_TINT_WEIGHT: 0.6,
-} as const;
+// Max height offset as fraction of HEX_SIZE (used by getTerrainRenderParams)
+const HEIGHT_SCALE = 120.0;
 
 // --- 3D Camera ---
 
@@ -279,7 +255,7 @@ export function getTerrainRenderParams(cfg: WorldGenConfig): TerrainRenderParams
   return {
     seaLevel,
     landRange: 1 - seaLevel,
-    heightScale: WORLD.HEX_SIZE * RENDER.HEIGHT_SCALE * (0.2 + cfg.verticality * 1.8),
+    heightScale: WORLD.HEX_SIZE * HEIGHT_SCALE * (0.2 + cfg.verticality * 1.8),
   };
 }
 

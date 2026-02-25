@@ -86,17 +86,3 @@ export const getHexDistance = (a: AxialCoord, b: AxialCoord): number => {
   return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2;
 };
 
-export const range = (start: number, end: number): number[] =>
-  Array.from({ length: end - start + 1 }, (_, i) => start + i);
-
-export const hexLine = (start: AxialCoord, end: AxialCoord): AxialCoord[] => {
-  const dist = getHexDistance(start, end);
-  if (dist === 0) return [];
-
-  return range(1, Math.floor(dist) - 1).map(i => {
-    const t = (1.0 / dist) * i;
-    const q = start.q + (end.q - start.q) * t;
-    const r = start.r + (end.r - start.r) * t;
-    return axialRound(q, r);
-  });
-};
