@@ -125,12 +125,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
   // --- Sync refs + rebuild lookup map when hexes change ---
   useEffect(() => {
     hexesRef.current = hexes;
-    const lookup = new Map<string, number>();
-    for (let i = 0; i < hexes.length; i++) {
-      const h = hexes[i]!;
-      lookup.set(`${h.coordinates.q},${h.coordinates.r}`, i);
-    }
-    hexLookupRef.current = lookup;
+    hexLookupRef.current = new Map(hexes.map((h, i) => [`${h.coordinates.q},${h.coordinates.r}`, i]));
     hoveredHexIndexRef.current = -1;
   }, [hexes]);
   useEffect(() => {
@@ -160,9 +155,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
         const mouseY = e.clientY - rect.top;
         const aspect = rect.width / rect.height;
         const viewProj = computeViewProjection(aspect);
-        const cfg = worldConfigRef.current;
-        const { seaLevel, heightScale } = getTerrainRenderParams(cfg);
-        const landRange = 1 - seaLevel;
+        const { seaLevel, landRange, heightScale } = getTerrainRenderParams(worldConfigRef.current);
         const allHexes = hexesRef.current;
 
         // Screen-space hit radius — matches visual gizmo size
@@ -198,9 +191,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
           // Raycast at the overlay's current terrain elevation for accurate placement
           const gIdx = hexLookupRef.current.get(`${target.coordinates.q},${target.coordinates.r}`);
           const gHex = gIdx !== undefined ? hexesRef.current[gIdx] : undefined;
-          const cfg = worldConfigRef.current;
-          const { seaLevel, heightScale } = getTerrainRenderParams(cfg);
-          const landRange = 1 - seaLevel;
+          const { seaLevel, landRange, heightScale } = getTerrainRenderParams(worldConfigRef.current);
           const planeY = gHex ? computeDisplacedY(gHex.elevation, seaLevel, landRange, heightScale) : 0;
 
           const hit = screenToGround(
@@ -322,7 +313,7 @@ export const HexGrid: React.FC<HexGridProps> = ({
     const aspect = logW / logH;
     const viewProj = computeViewProjection(aspect);
     const cfg = worldConfigRef.current;
-    const { seaLevel, heightScale } = getTerrainRenderParams(cfg);
+    const { seaLevel, landRange, heightScale } = getTerrainRenderParams(cfg);
 
     const mountainThreshold = TERRAIN.MOUNTAIN_THRESHOLD_BASE - cfg.mountainLevel * TERRAIN.MOUNTAIN_THRESHOLD_RANGE;
     const hillThreshold = mountainThreshold - TERRAIN.HILL_OFFSET;
@@ -362,9 +353,6 @@ export const HexGrid: React.FC<HexGridProps> = ({
 
     const allHexes = hexesRef.current;
     const hoveredIdx = hoveredHexIndexRef.current;
-
-    // Height params for overlay projection
-    const landRange = 1 - seaLevel;
 
     // Hover highlight
     if (hoveredIdx >= 0) {
