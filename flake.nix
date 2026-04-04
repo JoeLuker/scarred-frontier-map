@@ -6,8 +6,10 @@
   };
 
   outputs = { self, nixpkgs }: let
-    system = "x86_64-linux";
-    pkgs = nixpkgs.legacyPackages.${system};
+    forAllSystems = f: nixpkgs.lib.genAttrs [
+      "x86_64-linux"
+      "aarch64-darwin"
+    ] (system: f nixpkgs.legacyPackages.${system});
   in {
     meta = {
       status = "active";
@@ -15,11 +17,12 @@
       category = "root";
     };
 
-    devShells.${system}.default = pkgs.mkShell {
-      packages = with pkgs; [
-        nodejs_20
-        nodePackages.typescript
-      ];
-    };
+    devShells = forAllSystems (pkgs: {
+      default = pkgs.mkShell {
+        packages = with pkgs; [
+          nodejs_20
+        ];
+      };
+    });
   };
 }

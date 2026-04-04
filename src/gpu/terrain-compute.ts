@@ -528,6 +528,7 @@ export class GpuTerrainProvider implements TerrainProvider {
       element: elementFromId(r.elementId),
       elevation: r.elevation,
       description: flavorFromId(r.flavorId),
+      hasRiver: r.flavorId === 2, // F_RIVER
     }));
   }
 

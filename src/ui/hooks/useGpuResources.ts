@@ -22,6 +22,7 @@ import {
   ISLAND_VERTEX_BYTE_STRIDE,
 } from '../../gpu';
 import type { TerrainGridData } from '../../gpu';
+import { FluidTexture } from '../../gpu/fluid-texture';
 
 export function useGpuResources(
   gpuCanvasRef: RefObject<HTMLCanvasElement | null>,
@@ -38,6 +39,7 @@ export function useGpuResources(
   const tornadoMeshRef = useRef<OverlayMesh | null>(null);
   const plumeMeshRef = useRef<OverlayMesh | null>(null);
   const seaBufferRef = useRef<GPUBuffer | null>(null);
+  const fluidTextureRef = useRef<FluidTexture | null>(null);
   const terrainGridRef = useRef<TerrainGridData | null>(null);
   const meshConfigRef = useRef<WorldGenConfig | null>(null);
   const hexStateSourceRef = useRef<HexData[] | null>(null);
@@ -86,8 +88,12 @@ export function useGpuResources(
         });
         device.queue.writeBuffer(seaBuffer, 0, seaVerts);
 
-        // Set hex state texture (stable reference — data updates via writeTexture)
+        // Create fluid texture for propagation simulation
+        const fluidTex = FluidTexture.create(device, WORLD.GRID_RADIUS);
+
+        // Set textures (stable references — data updates via writeTexture)
         scene.setHexStateTexture(hexState.texture);
+        scene.setFluidTexture(fluidTex.texture);
 
         // Register scene objects
         scene.addObject('sky', { material: skyMat, drawCount: 3, renderOrder: 0 });
@@ -147,6 +153,7 @@ export function useGpuResources(
         tornadoMeshRef.current = tornadoMesh;
         plumeMeshRef.current = plumeMesh;
         seaBufferRef.current = seaBuffer;
+        fluidTextureRef.current = fluidTex;
 
         // Build initial mesh + hex state
         const cfg = worldConfigRef.current;
@@ -195,6 +202,8 @@ export function useGpuResources(
       plumeMeshRef.current = null;
       seaBufferRef.current?.destroy();
       seaBufferRef.current = null;
+      fluidTextureRef.current?.destroy();
+      fluidTextureRef.current = null;
       terrainGridRef.current = null;
     };
   }, []);
@@ -210,6 +219,7 @@ export function useGpuResources(
     tornadoMesh: tornadoMeshRef,
     plumeMesh: plumeMeshRef,
     seaBuffer: seaBufferRef,
+    fluidTexture: fluidTextureRef,
     terrainGrid: terrainGridRef,
     meshConfig: meshConfigRef,
     hexStateSource: hexStateSourceRef,

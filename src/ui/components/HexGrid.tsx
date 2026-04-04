@@ -10,6 +10,7 @@ import { useTerrainMesh } from '../hooks/useTerrainMesh';
 import { useHexStateSync } from '../hooks/useHexStateSync';
 import { useAirMesh } from '../hooks/useAirMesh';
 import { useFireMesh } from '../hooks/useFireMesh';
+import { useSimulation } from '../hooks/useSimulation';
 import {
   computeDisplacedY,
   worldToScreen,
@@ -82,8 +83,9 @@ export const HexGrid: React.FC<HexGridProps> = ({
   const hexLookupRef = useRef<Map<string, number>>(new Map());
   const hoveredHexIndexRef = useRef(-1);
 
-  // FPS counter
+  // FPS counter + simulation timing
   const fpsRef = useRef({ frames: 0, lastTime: performance.now(), fps: 0 });
+  const lastFrameTimeRef = useRef(performance.now());
   const fpsElRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -121,6 +123,17 @@ export const HexGrid: React.FC<HexGridProps> = ({
     gpu.scene,
     gpu.plumeMesh,
   );
+
+  // --- Propagation simulation ---
+  const handleSimMutations = useCallback((indices: number[]) => {
+    const hexState = gpu.hexState.current;
+    if (hexState) {
+      hexState.update(hexesRef.current);
+    }
+  }, [gpu.hexState]);
+  const simulation = useSimulation(hexes, planarOverlays, gpu.fluidTexture, handleSimMutations);
+  const simTickRef = useRef(simulation.tick);
+  simTickRef.current = simulation.tick;
 
   // --- Sync refs + rebuild lookup map when hexes change ---
   useEffect(() => {
@@ -279,10 +292,15 @@ export const HexGrid: React.FC<HexGridProps> = ({
     // --- WASD keyboard panning ---
     tickKeys();
 
+    // --- Propagation simulation tick ---
+    const now = performance.now();
+    const dtMs = Math.min(now - lastFrameTimeRef.current, 100); // cap to avoid spiral
+    lastFrameTimeRef.current = now;
+    simTickRef.current(dtMs);
+
     // --- FPS tracking ---
     const fpsState = fpsRef.current;
     fpsState.frames++;
-    const now = performance.now();
     if (now - fpsState.lastTime >= 1000) {
       fpsState.fps = fpsState.frames;
       fpsState.frames = 0;

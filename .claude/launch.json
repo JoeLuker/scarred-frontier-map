@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vite-dev-server",
+      "runtimeExecutable": "/nix/var/nix/profiles/default/bin/nix",
+      "runtimeArgs": ["develop", "--command", "npm", "run", "dev"],
+      "port": 3001
+    },
+    {
+      "name": "vite-preview",
+      "runtimeExecutable": "/nix/var/nix/profiles/default/bin/nix",
+      "runtimeArgs": ["develop", "--command", "npm", "run", "preview"],
+      "port": 4173
+    }
+  ]
+}

@@ -102,6 +102,7 @@ describe('computeHexState', () => {
     baseDescription: `${terrain} hex`,
     notes: '',
     elevation: 0.5,
+    hasRiver: false,
     planarAlignment: PlanarAlignment.MATERIAL,
     planarIntensity: 0,
     planarFragmentation: 0.5,

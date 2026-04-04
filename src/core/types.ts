@@ -75,6 +75,9 @@ export interface HexData {
   // Terrain elevation (0-1 continuous value from noise)
   elevation: number;
 
+  // River detection (true if hex contains a river segment)
+  hasRiver: boolean;
+
   // Base State (For reverting Planar Mutations)
   readonly baseTerrain: TerrainType;
   readonly baseDescription: string;
@@ -126,6 +129,21 @@ export interface WorldState {
   readonly hexes: HexData[];
   readonly overlays: PlanarOverlay[];
   readonly config: WorldGenConfig;
+}
+
+// --- Propagation Types ---
+
+export enum SubstanceType {
+  NONE = 0,
+  WATER = 1,
+  FIRE = 2,
+  LAVA = 3,
+}
+
+export interface TerrainMutation {
+  readonly hexIndex: number;
+  readonly newTerrain: TerrainType;
+  readonly newDescription: string;
 }
 
 export type HistoryAction =

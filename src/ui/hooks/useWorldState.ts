@@ -125,6 +125,7 @@ export const useWorldState = () => {
         terrain: r.terrain,
         element: r.element,
         elevation: r.elevation,
+        hasRiver: r.hasRiver,
         description: r.description,
         baseDescription: r.description,
         baseTerrain: r.terrain,

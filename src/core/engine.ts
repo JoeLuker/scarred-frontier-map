@@ -12,6 +12,7 @@ export interface TerrainResult {
   readonly element: TerrainElement;
   readonly elevation: number;
   readonly description: string;
+  readonly hasRiver: boolean;
 }
 
 export interface TerrainProvider {
@@ -113,6 +114,7 @@ export class WorldEngine {
         terrain: r.terrain,
         element: r.element,
         elevation: r.elevation,
+        hasRiver: r.hasRiver,
         description: r.description,
         baseDescription: r.description,
         baseTerrain: r.terrain,

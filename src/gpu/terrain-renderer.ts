@@ -32,6 +32,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var hex_state_tex: texture_2d<f32>;
 @group(0) @binding(2) var island_tex: texture_2d<f32>;
+@group(0) @binding(3) var fluid_tex: texture_2d<f32>;
 
 // Per-object configuration (scene graph — identity model for terrain/sea)
 struct ObjectConfig {
@@ -192,6 +193,25 @@ fn vs_main(in: VertexIn) -> VertexOut {
   let vt_hex_dist = max(max(abs(vt_hex.qr.x), abs(vt_hex.qr.y)), abs(vt_hex.qr.x + vt_hex.qr.y));
   let edge_fade = smoothstep(u.grid_radius - 3.0, u.grid_radius, vt_hex_dist);
   y *= (1.0 - edge_fade);
+
+  // Fluid propagation displacement — stacks on top of planar displacement.
+  // Samples fluid_tex so water visually pools and lava builds up.
+  let fluid_texel = vec2i(i32(vt_hex.qr.x) + i32(u.grid_radius), i32(vt_hex.qr.y) + i32(u.grid_radius));
+  let fluid_data = textureLoad(fluid_tex, fluid_texel, 0);
+  let fluid_level = fluid_data.r;
+  let fluid_type = u32(fluid_data.g * 255.0 + 0.5);
+
+  if (fluid_type == 1u && fluid_level > 0.0) {
+    // Water: raise toward sea-level surface (y=0 in displaced space) so depressions fill.
+    // At full fluid_level, terrain rises to y=0 (sea surface). Partial levels interpolate.
+    let water_surface = 0.0;
+    if (y < water_surface) {
+      y = mix(y, water_surface, fluid_level);
+    }
+  } else if (fluid_type == 3u && fluid_level > 0.0) {
+    // Lava: slight buildup on top of existing terrain.
+    y += fluid_level * hs * 0.02;
+  }
 
   let local = vec4f(in.pos_xz.x, y, in.pos_xz.y, 1.0);
   let world = (obj.model * local).xyz;
@@ -864,6 +884,22 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
 
     // Planar material replacement (water surface)
     color = mix(color, pm.replace_color, pm.replace_strength);
+
+    // Fluid overlay on water: fire/lava can affect water surface
+    let w_fluid_texel = vec2i(i32(hex.qr.x) + i32(u.grid_radius), i32(hex.qr.y) + i32(u.grid_radius));
+    let w_fluid_data = textureLoad(fluid_tex, w_fluid_texel, 0);
+    let w_fluid_level = w_fluid_data.r;
+    let w_fluid_type = u32(w_fluid_data.g * 255.0 + 0.5);
+    if (w_fluid_level > 0.01 && w_fluid_type >= 2u) {
+      if (w_fluid_type == 2u) {
+        let steam_color = vec3f(0.7, 0.5, 0.3);
+        color = mix(color, steam_color, w_fluid_level * 0.5);
+      }
+      if (w_fluid_type == 3u) {
+        let lava_water = vec3f(0.5, 0.1, 0.0);
+        color = mix(color, lava_water, w_fluid_level * 0.6);
+      }
+    }
   } else {
     // --- Tile base from canonical terrain color (sharp per-hex) ---
     color = u.terrain_colors[hex_terrain_id].rgb;
@@ -923,6 +959,37 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
 
     // Planar material replacement (before lighting)
     color = mix(color, pm.replace_color, pm.replace_strength);
+
+    // --- Fluid propagation overlay ---
+    // Sample fluid texture: R = level (0-1), G = substance type (0-255)
+    let fluid_texel = vec2i(i32(hex.qr.x) + i32(u.grid_radius), i32(hex.qr.y) + i32(u.grid_radius));
+    let fluid_data = textureLoad(fluid_tex, fluid_texel, 0);
+    let fluid_level = fluid_data.r;
+    let fluid_type = u32(fluid_data.g * 255.0 + 0.5);
+
+    if (fluid_level > 0.01) {
+      // Water (type 1): deep blue tint, darkens terrain
+      if (fluid_type == 1u) {
+        let water_tint = vec3f(0.08, 0.22, 0.55);
+        let deep_water = vec3f(0.03, 0.08, 0.20);
+        let fluid_color = mix(water_tint, deep_water, fluid_level);
+        color = mix(color, fluid_color, smoothstep(0.0, 0.3, fluid_level) * 0.75);
+      }
+      // Fire (type 2): orange-red glow
+      if (fluid_type == 2u) {
+        let fire_lo = vec3f(0.6, 0.15, 0.0);
+        let fire_hi = vec3f(1.0, 0.5, 0.1);
+        let fluid_color = mix(fire_lo, fire_hi, fluid_level);
+        color = mix(color, fluid_color, smoothstep(0.0, 0.2, fluid_level) * 0.8);
+      }
+      // Lava (type 3): dark red-black
+      if (fluid_type == 3u) {
+        let lava_lo = vec3f(0.3, 0.05, 0.0);
+        let lava_hi = vec3f(0.8, 0.2, 0.0);
+        let fluid_color = mix(lava_lo, lava_hi, fluid_level);
+        color = mix(color, fluid_color, smoothstep(0.0, 0.15, fluid_level) * 0.85);
+      }
+    }
 
     // Material roughness: wet lowlands get specular, dry highlands are matte
     let roughness = clamp(mix(0.3, 0.95, smoothstep(0.0, 0.5, norm_elev)) + pm.roughness_mod, 0.05, 1.0);
