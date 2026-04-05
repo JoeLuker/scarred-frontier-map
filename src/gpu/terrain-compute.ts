@@ -1,8 +1,8 @@
-import { TERRAIN, BIOME, WORLD } from '../core/config';
+import { TERRAIN, BIOME, WORLD } from '../core/constants';
 import { WorldGenConfig, AxialCoord } from '../core/types';
 import { terrainFromId, elementFromId, flavorFromId } from './types';
 import { createTerrainNoiseWGSL } from './terrain-noise.wgsl';
-import type { TerrainProvider, TerrainResult } from '../core/engine';
+import type { TerrainProvider, TerrainResult } from '../core/types';
 
 // --- Terrain result from GPU readback ---
 

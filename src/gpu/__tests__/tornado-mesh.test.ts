@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildTornadoMesh, type TornadoDescriptor } from '../tornado-mesh';
-import { PLANAR } from '../../core/config';
+import { PLANAR } from '../../core/constants';
 import { TORNADO_VERTEX_STRIDE } from '../types';
 
 const T = PLANAR.TORNADO;

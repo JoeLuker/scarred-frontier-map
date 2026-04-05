@@ -14,7 +14,7 @@
  */
 
 import { createRenderNoiseWGSL } from './render-noise.wgsl';
-import { PLANAR } from '../core/config';
+import { PLANAR } from '../core/constants';
 import type { TerrainGridData } from './terrain-mesh';
 
 const WG = 16; // workgroup size (16×16 = 256 threads)
