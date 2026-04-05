@@ -1,20 +1,34 @@
 import { PlanarAlignment, WorldGenConfig } from '../core/types';
-import { DEFAULT_WORLD_CONFIG, WORLD } from '../core/constants';
+import { DEFAULT_WORLD_CONFIG, WORLD, MESH } from '../core/constants';
 import { SimField } from './components/SimField';
 import { HexStore } from './components/HexStore';
 import { OverlayStore } from './components/OverlayStore';
 import type { DirtyFlags, OverlayId, OverlayParams, WorldSnapshot } from './types';
 
-const SIM_TICK_INTERVAL = 1 / 30; // 30Hz simulation
+// GPU pipeline
+import {
+  Scene,
+  createTerrainShader,
+  createTerrainMaterial,
+  createSeaMaterial,
+  createSkyMaterial,
+  TerrainMesh,
+  buildTerrainMesh,
+  MeshCompute,
+  OBJECT_FLAGS,
+} from '../gpu';
+
+// Systems
+import { ShallowWaterCompute } from './systems/gpu/ShallowWaterCompute';
+import { SourceInjectionCompute } from './systems/gpu/SourceInjectionCompute';
+import { UniformSystem, type CameraState } from './systems/render/UniformSystem';
+import { RenderSystem } from './systems/render/RenderSystem';
+import { getViewProjection, getEyePosition } from '../core/camera';
+import { CAMERA } from '../core/constants';
+
+const SIM_TICK_INTERVAL = 1 / 30;
 const HISTORY_LIMIT = WORLD.HISTORY_LIMIT;
 
-/**
- * Central ECS container. Owns all component stores, drives system execution,
- * manages history snapshots, and provides the React subscription API.
- *
- * The tick loop is driven externally (rAF from React or a standalone loop).
- * World.tick(dt) advances simulation, updates derived state, and renders.
- */
 export class World {
   // Component stores
   readonly simField: SimField;
@@ -25,7 +39,27 @@ export class World {
   config: WorldGenConfig;
   readonly device: GPUDevice;
 
-  // Dirty flags for system gating
+  // GPU pipeline
+  private scene: Scene;
+  private terrainMesh: TerrainMesh;
+  private meshCompute: MeshCompute;
+
+  // Systems
+  private shallowWater: ShallowWaterCompute;
+  private sourceInjection: SourceInjectionCompute;
+  private uniformSystem: UniformSystem;
+  private renderSystem: RenderSystem;
+
+  // Camera
+  readonly camera = {
+    azimuth: CAMERA.DEFAULT_AZIMUTH,
+    elevation: CAMERA.DEFAULT_ELEVATION,
+    distance: CAMERA.DEFAULT_DISTANCE,
+    targetX: 0,
+    targetZ: 0,
+  };
+
+  // Dirty flags
   readonly dirty: DirtyFlags = {
     chemistry: false,
     hexState: false,
@@ -36,8 +70,9 @@ export class World {
 
   // Timing
   private simAccumulator = 0;
+  private time = 0;
 
-  // History (snapshot-based undo/redo)
+  // History
   private history: WorldSnapshot[] = [];
   private historyIndex = -1;
 
@@ -51,80 +86,164 @@ export class World {
     hexes: HexStore,
     overlays: OverlayStore,
     config: WorldGenConfig,
+    scene: Scene,
+    terrainMesh: TerrainMesh,
+    meshCompute: MeshCompute,
+    shallowWater: ShallowWaterCompute,
+    sourceInjection: SourceInjectionCompute,
+    uniformSystem: UniformSystem,
+    renderSystem: RenderSystem,
   ) {
     this.device = device;
     this.simField = simField;
     this.hexes = hexes;
     this.overlays = overlays;
     this.config = config;
+    this.scene = scene;
+    this.terrainMesh = terrainMesh;
+    this.meshCompute = meshCompute;
+    this.shallowWater = shallowWater;
+    this.sourceInjection = sourceInjection;
+    this.uniformSystem = uniformSystem;
+    this.renderSystem = renderSystem;
   }
 
   static async create(
     device: GPUDevice,
+    canvas: HTMLCanvasElement,
     config: WorldGenConfig = DEFAULT_WORLD_CONFIG,
   ): Promise<World> {
+    // Component stores
     const simField = SimField.create(device);
     const hexes = HexStore.create(WORLD.GRID_RADIUS);
     const overlays = new OverlayStore();
 
-    const world = new World(device, simField, hexes, overlays, config);
+    // Scene + materials
+    const scene = Scene.create(device, canvas);
+    const shader = device.createShaderModule({ code: createTerrainShader() });
+    const terrainMat = createTerrainMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
+    const seaMat = createSeaMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
+    const skyMat = createSkyMaterial(device, shader, scene.format, scene.group0Layout);
 
-    // Mark everything dirty for initial build
-    world.dirty.chemistry = true;
-    world.dirty.hexState = true;
-    world.dirty.mesh = true;
-    world.dirty.elevation = true;
+    // Terrain mesh
+    const terrainMesh = TerrainMesh.create(device, 250000);
+    const meshCompute = MeshCompute.create(device, 250000);
+
+    // Sea quad
+    const SEA_EXTENT = 100000;
+    const seaVerts = new Float32Array([
+      -SEA_EXTENT, -SEA_EXTENT, 0, 0, 0, 1, 0,
+       SEA_EXTENT, -SEA_EXTENT, 0, 0, 0, 1, 0,
+      -SEA_EXTENT,  SEA_EXTENT, 0, 0, 0, 1, 0,
+      -SEA_EXTENT,  SEA_EXTENT, 0, 0, 0, 1, 0,
+       SEA_EXTENT, -SEA_EXTENT, 0, 0, 0, 1, 0,
+       SEA_EXTENT,  SEA_EXTENT, 0, 0, 0, 1, 0,
+    ]);
+    const seaBuffer = device.createBuffer({
+      size: seaVerts.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(seaBuffer, 0, seaVerts);
+
+    // Register scene objects
+    scene.addObject('sky', { material: skyMat, drawCount: 3, renderOrder: 0 });
+    scene.addObject('terrain', {
+      material: terrainMat,
+      mesh: terrainMesh,
+      flags: OBJECT_FLAGS.IS_TERRAIN,
+      stencilRef: 1,
+      renderOrder: 1,
+    });
+    scene.addObject('sea', {
+      material: seaMat,
+      mesh: { vertexBuffer: seaBuffer, vertexCount: 6 },
+      flags: OBJECT_FLAGS.IS_SEA,
+      stencilRef: 0,
+      renderOrder: 4,
+    });
+
+    // GPU compute systems
+    const shallowWater = ShallowWaterCompute.create(device, simField);
+    const sourceInjection = SourceInjectionCompute.create(device, simField);
+
+    // Render systems
+    const uniformSystem = UniformSystem.create(scene);
+    const renderSystem = RenderSystem.create(device, scene, simField);
+
+    const world = new World(
+      device, simField, hexes, overlays, config,
+      scene, terrainMesh, meshCompute,
+      shallowWater, sourceInjection,
+      uniformSystem, renderSystem,
+    );
+
+    // Generate initial terrain mesh
+    await world.buildMesh(config);
 
     // Push initial snapshot
     world.pushSnapshot();
 
+    console.log(`World initialized: ${hexes.hexCount} hexes, sim ${simField.config.width}×${simField.config.height}, mesh ready`);
+
     return world;
+  }
+
+  // --- Mesh building ---
+
+  private async buildMesh(config: WorldGenConfig): Promise<void> {
+    const result = await buildTerrainMesh(
+      this.meshCompute, config,
+      WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING,
+    );
+    this.terrainMesh.upload(result.mesh);
+
+    // Upload elevation + moisture to sim field
+    if (result.grid) {
+      this.simField.uploadElevation(result.grid.elevations);
+      this.simField.uploadMoisture(result.grid.moistures);
+    }
   }
 
   // --- Tick ---
 
   tick(dt: number): void {
+    this.time += dt;
+
     // Accumulate simulation time
     this.simAccumulator += dt;
-    let simStepped = false;
-
     while (this.simAccumulator >= SIM_TICK_INTERVAL) {
       this.simAccumulator -= SIM_TICK_INTERVAL;
-      // GPU compute systems would dispatch here:
-      // this.shallowWaterSystem.execute(this);
-      // this.heatDiffusionSystem.execute(this);
-      simStepped = true;
-    }
 
-    if (simStepped) {
+      const encoder = this.device.createCommandEncoder();
+
+      // Inject sources from overlays
+      this.sourceInjection.dispatch(encoder, this.simField, this.overlays, WORLD.HEX_SIZE);
+
+      // Swap to write target, run shallow water, swap back to read
+      this.simField.swapFluid();
+      this.shallowWater.dispatch(encoder, this.simField, SIM_TICK_INTERVAL);
+      this.simField.swapFluid();
+
+      this.device.queue.submit([encoder.finish()]);
       this.dirty.fluid = true;
     }
 
-    // CPU systems
-    // this.inputSystem.execute(this);
-    // this.bridgeSystem.execute(this);
+    // Camera → uniforms
+    const aspect = (this.scene as any).context?.canvas?.width / (this.scene as any).context?.canvas?.height || 1;
+    const viewProj = getViewProjection(this.camera, CAMERA.FOV, aspect, CAMERA.NEAR, CAMERA.FAR);
+    const eyePos = getEyePosition(this.camera);
 
-    if (this.dirty.chemistry) {
-      // this.chemistrySystem.execute(this);
-      this.dirty.chemistry = false;
-      this.dirty.hexState = true;
-      this.dirty.mesh = true;
-    }
+    this.uniformSystem.execute(
+      { viewProj, eyePos: eyePos as [number, number, number] },
+      this.config,
+      dt,
+    );
 
-    // Texture upload systems
-    // if (this.dirty.hexState || this.dirty.fluid) {
-    //   this.textureUploadSystem.execute(this);
-    //   this.dirty.hexState = false;
-    //   this.dirty.fluid = false;
-    // }
-
-    // Uniform + mesh + render systems
-    // this.uniformSystem.execute(this);
-    // if (this.dirty.mesh) { this.meshSystem.execute(this); this.dirty.mesh = false; }
-    // this.renderSystem.execute(this);
+    // Render
+    this.renderSystem.execute();
   }
 
-  // --- Commands (state mutations, push history) ---
+  // --- Commands ---
 
   addOverlay(alignment: PlanarAlignment, q: number, r: number, params?: Partial<OverlayParams>): OverlayId {
     this.pushSnapshot();
@@ -137,20 +256,14 @@ export class World {
   removeOverlay(id: OverlayId): boolean {
     this.pushSnapshot();
     const ok = this.overlays.remove(id);
-    if (ok) {
-      this.dirty.chemistry = true;
-      this.notify();
-    }
+    if (ok) { this.dirty.chemistry = true; this.notify(); }
     return ok;
   }
 
   modifyOverlay(id: OverlayId, changes: Partial<OverlayParams> & { q?: number; r?: number }): boolean {
     this.pushSnapshot();
     const ok = this.overlays.modify(id, changes);
-    if (ok) {
-      this.dirty.chemistry = true;
-      this.notify();
-    }
+    if (ok) { this.dirty.chemistry = true; this.notify(); }
     return ok;
   }
 
@@ -164,7 +277,6 @@ export class World {
   // --- History ---
 
   private pushSnapshot(): void {
-    // Truncate forward history on new action
     if (this.historyIndex < this.history.length - 1) {
       this.history.length = this.historyIndex + 1;
     }
@@ -179,7 +291,6 @@ export class World {
     this.history.push(snapshot);
     this.historyIndex = this.history.length - 1;
 
-    // Enforce history limit
     if (this.history.length > HISTORY_LIMIT) {
       this.history.shift();
       this.historyIndex--;
@@ -207,8 +318,6 @@ export class World {
     this.simField.uploadFluid(snap.fluid);
     this.overlays.restore(snap.overlayData);
     this.config = { ...snap.config };
-
-    // Mark everything dirty
     this.dirty.chemistry = true;
     this.dirty.hexState = true;
     this.dirty.fluid = true;
@@ -219,13 +328,11 @@ export class World {
   get canUndo(): boolean { return this.historyIndex > 0; }
   get canRedo(): boolean { return this.historyIndex < this.history.length - 1; }
 
-  // --- React Subscription ---
+  // --- React ---
 
   private notify(): void {
     this.version++;
-    for (const listener of this.listeners) {
-      listener();
-    }
+    for (const listener of this.listeners) listener();
   }
 
   subscribe(listener: () => void): () => void {
@@ -237,6 +344,11 @@ export class World {
 
   destroy(): void {
     this.simField.destroy();
+    this.shallowWater.destroy();
+    this.sourceInjection.destroy();
+    this.scene.destroy();
+    this.terrainMesh.destroy();
+    this.meshCompute.destroy();
     this.listeners.clear();
     this.history.length = 0;
   }

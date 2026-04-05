@@ -35,19 +35,11 @@ export function WorldProvider({ children }: { children: ReactNode }) {
       const device = await adapter.requestDevice();
       if (cancelled) { device.destroy(); return; }
 
-      // Configure canvas
-      const format = navigator.gpu.getPreferredCanvasFormat();
-      const ctx = canvas.getContext('webgpu');
-      if (!ctx || cancelled) { device.destroy(); return; }
-      ctx.configure({ device, format, alphaMode: 'opaque' });
-
-      // Create world
-      const world = await World.create(device);
+      // Create world (handles canvas config, scene, materials, mesh internally)
+      const world = await World.create(device, canvas);
       if (cancelled) { world.destroy(); return; }
       worldRef.current = world;
       setReady(true);
-
-      console.log(`World created: ${world.hexes.hexCount} hexes, sim field ${world.simField.config.width}×${world.simField.config.height}`);
 
       // rAF loop
       let prev = performance.now();
