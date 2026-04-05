@@ -1,5 +1,6 @@
 import React from 'react';
 import { WorldProvider } from './WorldContext';
+import { TelemetryOverlay } from './components/TelemetryOverlay';
 
 const App: React.FC = () => {
   return (
@@ -11,16 +12,10 @@ const App: React.FC = () => {
   );
 };
 
-/** UI overlay — panels rendered on top of the WebGPU canvas. */
 function WorldOverlay() {
   return (
-    <div className="absolute inset-0 z-10 flex pointer-events-none">
-      {/* Phase 3 UI panels will be added here */}
-      <div className="absolute top-4 left-4 pointer-events-auto">
-        <div className="bg-slate-900/80 backdrop-blur-sm rounded-lg px-3 py-2 text-xs text-slate-400">
-          ECS v2 — simulation running
-        </div>
-      </div>
+    <div className="absolute inset-0 z-10 pointer-events-none">
+      <TelemetryOverlay />
     </div>
   );
 }

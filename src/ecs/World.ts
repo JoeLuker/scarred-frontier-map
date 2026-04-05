@@ -25,6 +25,7 @@ import { UniformSystem, type CameraState } from './systems/render/UniformSystem'
 import { RenderSystem } from './systems/render/RenderSystem';
 import { getViewProjection, getEyePosition } from '../core/camera';
 import { CAMERA } from '../core/constants';
+import { Telemetry, type TelemetrySnapshot } from './telemetry/Telemetry';
 
 const SIM_TICK_INTERVAL = 1 / 30;
 const HISTORY_LIMIT = WORLD.HISTORY_LIMIT;
@@ -49,6 +50,9 @@ export class World {
   private sourceInjection: SourceInjectionCompute;
   private uniformSystem: UniformSystem;
   private renderSystem: RenderSystem;
+
+  // Telemetry
+  readonly telemetry: Telemetry;
 
   // Camera
   readonly camera = {
@@ -93,6 +97,7 @@ export class World {
     sourceInjection: SourceInjectionCompute,
     uniformSystem: UniformSystem,
     renderSystem: RenderSystem,
+    telemetry: Telemetry,
   ) {
     this.device = device;
     this.simField = simField;
@@ -106,6 +111,7 @@ export class World {
     this.sourceInjection = sourceInjection;
     this.uniformSystem = uniformSystem;
     this.renderSystem = renderSystem;
+    this.telemetry = telemetry;
   }
 
   static async create(
@@ -170,11 +176,14 @@ export class World {
     const uniformSystem = UniformSystem.create(scene);
     const renderSystem = RenderSystem.create(device, scene, simField);
 
+    // Telemetry
+    const telemetry = Telemetry.create(device);
+
     const world = new World(
       device, simField, hexes, overlays, config,
       scene, terrainMesh, meshCompute,
       shallowWater, sourceInjection,
-      uniformSystem, renderSystem,
+      uniformSystem, renderSystem, telemetry,
     );
 
     // Generate initial terrain mesh
@@ -207,40 +216,57 @@ export class World {
   // --- Tick ---
 
   tick(dt: number): void {
+    const frameStart = this.telemetry.beginFrame();
     this.time += dt;
 
-    // Accumulate simulation time
-    this.simAccumulator += dt;
-    while (this.simAccumulator >= SIM_TICK_INTERVAL) {
-      this.simAccumulator -= SIM_TICK_INTERVAL;
+    // Simulation (measured)
+    this.telemetry.measureSim(() => {
+      let ticks = 0;
+      this.simAccumulator += dt;
+      while (this.simAccumulator >= SIM_TICK_INTERVAL) {
+        this.simAccumulator -= SIM_TICK_INTERVAL;
 
-      const encoder = this.device.createCommandEncoder();
+        const encoder = this.device.createCommandEncoder();
 
-      // Inject sources from overlays
-      this.sourceInjection.dispatch(encoder, this.simField, this.overlays, WORLD.HEX_SIZE);
+        // Source injection
+        this.sourceInjection.dispatch(encoder, this.simField, this.overlays, WORLD.HEX_SIZE);
 
-      // Swap to write target, run shallow water, swap back to read
-      this.simField.swapFluid();
-      this.shallowWater.dispatch(encoder, this.simField, SIM_TICK_INTERVAL);
-      this.simField.swapFluid();
+        // Swap to write target, run shallow water, swap back
+        this.simField.swapFluid();
+        this.shallowWater.dispatch(encoder, this.simField, SIM_TICK_INTERVAL);
+        this.simField.swapFluid();
 
-      this.device.queue.submit([encoder.finish()]);
-      this.dirty.fluid = true;
-    }
+        this.device.queue.submit([encoder.finish()]);
 
-    // Camera → uniforms
-    const aspect = (this.scene as any).context?.canvas?.width / (this.scene as any).context?.canvas?.height || 1;
-    const viewProj = getViewProjection(this.camera, CAMERA.FOV, aspect, CAMERA.NEAR, CAMERA.FAR);
-    const eyePos = getEyePosition(this.camera);
+        this.dirty.fluid = true;
+        ticks++;
+      }
+      return ticks;
+    });
 
-    this.uniformSystem.execute(
-      { viewProj, eyePos: eyePos as [number, number, number] },
-      this.config,
-      dt,
-    );
+    // Uniforms (measured)
+    this.telemetry.measureUniform(() => {
+      const aspect = (this.scene as any).context?.canvas?.width / (this.scene as any).context?.canvas?.height || 1;
+      const viewProj = getViewProjection(this.camera, CAMERA.FOV, aspect, CAMERA.NEAR, CAMERA.FAR);
+      const eyePos = getEyePosition(this.camera);
+      this.uniformSystem.execute(
+        { viewProj, eyePos: eyePos as [number, number, number] },
+        this.config,
+        dt,
+      );
+    });
 
-    // Render
-    this.renderSystem.execute();
+    // Render (measured)
+    this.telemetry.measureRender(() => {
+      this.renderSystem.execute();
+    });
+
+    this.telemetry.endFrame(frameStart);
+  }
+
+  /** Get current telemetry snapshot for UI display. */
+  getTelemetry(): TelemetrySnapshot {
+    return this.telemetry.snapshot();
   }
 
   // --- Commands ---
@@ -343,6 +369,7 @@ export class World {
   // --- Cleanup ---
 
   destroy(): void {
+    this.telemetry.destroy();
     this.simField.destroy();
     this.shallowWater.destroy();
     this.sourceInjection.destroy();
