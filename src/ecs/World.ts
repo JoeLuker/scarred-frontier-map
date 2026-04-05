@@ -56,7 +56,7 @@ export class World {
   readonly telemetry: Telemetry;
 
   // Camera
-  readonly camera = {
+  readonly camera: { azimuth: number; elevation: number; distance: number; targetX: number; targetZ: number } = {
     azimuth: CAMERA.DEFAULT_AZIMUTH,
     elevation: CAMERA.DEFAULT_ELEVATION,
     distance: CAMERA.DEFAULT_DISTANCE,
