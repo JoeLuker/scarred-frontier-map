@@ -42,6 +42,7 @@ export class World {
 
   // GPU pipeline
   private scene: Scene;
+  private canvas: HTMLCanvasElement;
   private terrainMesh: TerrainMesh;
   private meshCompute: MeshCompute;
 
@@ -98,6 +99,7 @@ export class World {
     uniformSystem: UniformSystem,
     renderSystem: RenderSystem,
     telemetry: Telemetry,
+    canvas: HTMLCanvasElement,
   ) {
     this.device = device;
     this.simField = simField;
@@ -105,6 +107,7 @@ export class World {
     this.overlays = overlays;
     this.config = config;
     this.scene = scene;
+    this.canvas = canvas;
     this.terrainMesh = terrainMesh;
     this.meshCompute = meshCompute;
     this.shallowWater = shallowWater;
@@ -183,7 +186,7 @@ export class World {
       device, simField, hexes, overlays, config,
       scene, terrainMesh, meshCompute,
       shallowWater, sourceInjection,
-      uniformSystem, renderSystem, telemetry,
+      uniformSystem, renderSystem, telemetry, canvas,
     );
 
     // Generate initial terrain mesh
@@ -219,6 +222,17 @@ export class World {
     const frameStart = this.telemetry.beginFrame();
     this.time += dt;
 
+    // Canvas resize (match display size to pixel size)
+    const dpr = window.devicePixelRatio || 1;
+    const displayW = this.canvas.clientWidth;
+    const displayH = this.canvas.clientHeight;
+    const pixW = Math.round(displayW * dpr);
+    const pixH = Math.round(displayH * dpr);
+    if (this.canvas.width !== pixW || this.canvas.height !== pixH) {
+      this.canvas.width = pixW;
+      this.canvas.height = pixH;
+    }
+
     // Simulation (measured)
     this.telemetry.measureSim(() => {
       let ticks = 0;
@@ -246,7 +260,7 @@ export class World {
 
     // Uniforms (measured)
     this.telemetry.measureUniform(() => {
-      const aspect = (this.scene as any).context?.canvas?.width / (this.scene as any).context?.canvas?.height || 1;
+      const aspect = this.canvas.width / (this.canvas.height || 1);
       const viewProj = getViewProjection(this.camera, CAMERA.FOV, aspect, CAMERA.NEAR, CAMERA.FAR);
       const eyePos = getEyePosition(this.camera);
       this.uniformSystem.execute(

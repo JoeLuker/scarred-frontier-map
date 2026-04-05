@@ -158,9 +158,9 @@ export class Telemetry {
   // GPU metrics (ms, async)
   private gpuTimestamps: GpuTimestamps | null;
 
-  // FPS
+  // FPS (wall-clock based, not processing-time based)
   private frameCount = 0;
-  private fpsAccumulator = 0;
+  private fpsWindowStart = performance.now();
   fps = 0;
 
   // Structured logging
@@ -188,15 +188,16 @@ export class Telemetry {
   beginFrame(): number { return performance.now(); }
 
   endFrame(start: number): void {
-    const dt = performance.now() - start;
+    const now = performance.now();
+    const dt = now - start;
     this.frameTime.push(dt);
     this.frameCount++;
-    this.fpsAccumulator += dt;
 
-    if (this.fpsAccumulator >= 1000) {
-      this.fps = Math.round(this.frameCount * 1000 / this.fpsAccumulator);
+    const elapsed = now - this.fpsWindowStart;
+    if (elapsed >= 1000) {
+      this.fps = Math.round(this.frameCount * 1000 / elapsed);
       this.frameCount = 0;
-      this.fpsAccumulator = 0;
+      this.fpsWindowStart = now;
     }
 
     this.maybeLog();
