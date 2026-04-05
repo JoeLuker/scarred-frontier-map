@@ -15,3 +15,5 @@ export type { PlumeDescriptor } from './plume-mesh';
 export { TERRAIN_ORDER, OBJECT_FLAGS, SCENE_OBJECTS, ISLAND_VERTEX_BYTE_STRIDE } from './types';
 export type { MeshBuffers, TerrainGridData } from './terrain-mesh';
 export type { IslandReadbackData } from './island-classify';
+export { buildClipmapRings } from './clipmap';
+export type { ClipmapConfig, ClipmapRing } from './clipmap';

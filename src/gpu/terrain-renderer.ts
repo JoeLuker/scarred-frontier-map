@@ -1,6 +1,8 @@
 // --- WGSL Shader (terrain) ---
 
 import { createRenderNoiseWGSL } from './render-noise.wgsl';
+import { createTerrainNormalsWGSL } from './terrain-normals.wgsl';
+import { createTerrainMaterialsWGSL } from './terrain-materials.wgsl';
 
 export function createTerrainShader(): string {
   return /* wgsl */ `
@@ -266,6 +268,8 @@ fn vs_island(in: VertexIslandIn) -> VertexOut {
 const PI: f32 = 3.14159265359;
 
 ` + createRenderNoiseWGSL() + `
+` + createTerrainNormalsWGSL() + `
+` + createTerrainMaterialsWGSL() + `
 
 // ============================================================
 // Tornado vertex shader — noise-displaced funnel with time-driven twist
@@ -921,6 +925,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     let hex_hash = hash2(hex.qr * 0.73 + vec2f(17.3, 31.7));
     color *= (0.92 + hex_hash * 0.16);
 
+    // Procedural material detail — high-frequency surface texture per terrain type.
+    // Fades out at distance to avoid noise aliasing.
+    let mat_detail_fade = material_detail_fade(in.world_pos, u.eye_pos);
+    if (mat_detail_fade > 0.01) {
+      let mat = sample_terrain_material(hex_terrain_id, in.world_pos.xz, slope, in.moisture);
+      color *= mix(vec3f(1.0), mat.color_mod, mat_detail_fade);
+    }
+
     // Subtle moisture modulation within the tile
     let moisture_shift = (in.moisture + pm.moisture_mod - 0.5) * 0.12;
     color *= (1.0 + moisture_shift);
@@ -1006,8 +1018,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     color += SUN_COLOR * land_spec;
   }
 
-  // --- Normal perturbation from planar effects ---
-  let perturbed_normal = normalize(normal + pm.normal_offset);
+  // --- Normal perturbation from planar effects + procedural micro-detail ---
+  let view_dist = length(in.world_pos - u.eye_pos);
+  let frag_land_range = max(1.0 - sea, 0.001);
+  let frag_norm_elev = clamp((in.elevation - sea) / frag_land_range, 0.0, 1.0);
+  let micro_normal = terrain_normal_detail(in.world_pos.xz, hex_terrain_id, slope, frag_norm_elev, view_dist);
+  let perturbed_normal = normalize(normal + pm.normal_offset + micro_normal);
 
   // --- Directional lighting (Wrapped Lambert with planar modifiers) ---
   let NdotL = dot(perturbed_normal, sun_dir);
@@ -1053,7 +1069,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   color = mix(color, color * 0.3, grid_line * grid_opacity);
 
   // Atmospheric scattering (replaces flat fog)
-  let view_dist = length(in.world_pos - u.eye_pos);
+  // view_dist already computed above (normal perturbation section)
   let view_to_frag = normalize(in.world_pos - u.eye_pos);
   let fog_amount = 1.0 - exp(-view_dist * FOG_DENSITY);
 
