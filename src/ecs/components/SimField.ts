@@ -93,7 +93,7 @@ export class SimField {
 
     const substance = device.createTexture({
       size: [width, height],
-      format: 'r8uint',
+      format: 'r32uint',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_DST,
     });
 
@@ -121,34 +121,48 @@ export class SimField {
     this.currentFluid = (1 - this.currentFluid) as 0 | 1;
   }
 
-  /** Upload elevation data from CPU array. */
+  /** Upload elevation data from CPU array. Handles size mismatch by padding. */
   uploadElevation(data: Float32Array): void {
-    this.elevationStaging.set(data);
+    const expected = this.config.width * this.config.height;
+    const padded = this.ensureSize(data, expected);
+    this.elevationStaging.set(padded);
     this.device.queue.writeTexture(
       { texture: this.elevation },
-      data,
+      padded,
       { bytesPerRow: this.config.width * 4 },
       [this.config.width, this.config.height],
     );
   }
 
-  /** Upload moisture data from CPU array. */
+  /** Upload moisture data from CPU array. Handles size mismatch by padding. */
   uploadMoisture(data: Float32Array): void {
+    const expected = this.config.width * this.config.height;
+    const padded = this.ensureSize(data, expected);
     this.device.queue.writeTexture(
       { texture: this.moisture },
-      data,
+      padded,
       { bytesPerRow: this.config.width * 4 },
       [this.config.width, this.config.height],
     );
   }
 
-  /** Upload fluid data (e.g., for snapshot restore). */
+  /** Pad or truncate a Float32Array to the expected size. */
+  private ensureSize(data: Float32Array, expected: number): Float32Array {
+    if (data.length === expected) return data;
+    const result = new Float32Array(expected);
+    result.set(data.subarray(0, Math.min(data.length, expected)));
+    return result;
+  }
+
+  /** Upload fluid data (e.g., for snapshot restore). Handles size mismatch. */
   uploadFluid(data: Float32Array): void {
-    this.fluidStaging.set(data);
+    const expected = this.config.width * this.config.height * 4;
+    const padded = this.ensureSize(data, expected);
+    this.fluidStaging.set(padded);
     this.device.queue.writeTexture(
       { texture: this.currentFluidTexture },
-      data,
-      { bytesPerRow: this.config.width * 4 * 4 }, // rgba32float = 16 bytes/pixel
+      padded,
+      { bytesPerRow: this.config.width * 4 * 4 },
       [this.config.width, this.config.height],
     );
   }
