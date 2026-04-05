@@ -129,7 +129,16 @@ export class World {
 
     // Scene + materials
     const scene = Scene.create(device, canvas);
-    const shader = device.createShaderModule({ code: createTerrainShader() });
+    const shaderCode = createTerrainShader();
+    const shader = device.createShaderModule({ code: shaderCode });
+
+    // Check shader compilation
+    const info = await shader.getCompilationInfo();
+    for (const msg of info.messages) {
+      const level = msg.type === 'error' ? 'error' : msg.type === 'warning' ? 'warn' : 'log';
+      console[level](`[WGSL ${msg.type}] line ${msg.lineNum}: ${msg.message}`);
+    }
+
     const terrainMat = createTerrainMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
     const seaMat = createSeaMaterial(device, shader, scene.format, scene.group0Layout, scene.group1Layout);
     const skyMat = createSkyMaterial(device, shader, scene.format, scene.group0Layout);
@@ -195,7 +204,7 @@ export class World {
     // Push initial snapshot
     world.pushSnapshot();
 
-    console.log(`World initialized: ${hexes.hexCount} hexes, sim ${simField.config.width}×${simField.config.height}, mesh ready`);
+    console.log(`World initialized: ${hexes.hexCount} hexes, sim ${simField.config.width}×${simField.config.height}, mesh ${terrainMesh.vertexCount} verts / ${terrainMesh.indexCount} indices, canvas ${canvas.width}×${canvas.height}`);
 
     return world;
   }
