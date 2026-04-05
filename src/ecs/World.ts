@@ -26,6 +26,8 @@ import { RenderSystem } from './systems/render/RenderSystem';
 import { getViewProjection, getEyePosition } from '../core/camera';
 import { CAMERA } from '../core/constants';
 import { Telemetry, type TelemetrySnapshot } from './telemetry/Telemetry';
+import { ClipmapSystem } from './systems/render/ClipmapSystem';
+import type { TerrainGridData } from '../gpu';
 
 const SIM_TICK_INTERVAL = 1 / 30;
 const HISTORY_LIMIT = WORLD.HISTORY_LIMIT;
@@ -51,6 +53,10 @@ export class World {
   private sourceInjection: SourceInjectionCompute;
   private uniformSystem: UniformSystem;
   private renderSystem: RenderSystem;
+
+  // Clipmap LOD
+  private clipmapSystem: ClipmapSystem | null = null;
+  private terrainGrid: TerrainGridData | null = null;
 
   // Telemetry
   readonly telemetry: Telemetry;
@@ -198,8 +204,9 @@ export class World {
       uniformSystem, renderSystem, telemetry, canvas,
     );
 
-    // Generate initial terrain mesh
+    // Generate initial terrain mesh + clipmap LOD
     await world.buildMesh(config);
+    world.initClipmapSystem(terrainMat);
 
     // Push initial snapshot
     world.pushSnapshot();
@@ -217,12 +224,48 @@ export class World {
       WORLD.GRID_RADIUS, WORLD.HEX_SIZE, MESH.VERTEX_SPACING,
     );
     this.terrainMesh.upload(result.mesh);
+    this.terrainGrid = result.grid;
 
     // Upload elevation + moisture to sim field
     if (result.grid) {
       this.simField.uploadElevation(result.grid.elevations);
       this.simField.uploadMoisture(result.grid.moistures);
     }
+  }
+
+  /** Build clipmap LOD after terrain grid data is available. */
+  private initClipmapSystem(terrainMat: any): void {
+    if (!this.terrainGrid) return;
+
+    const grid = this.terrainGrid;
+    const worldRadius = WORLD.GRID_RADIUS * WORLD.HEX_SIZE * Math.sqrt(3);
+
+    // Sampling callbacks: bilinear lookup into the terrain grid
+    const sampleGrid = (x: number, z: number, data: Float32Array): number => {
+      const col = (x - grid.originX) / grid.spacing;
+      const row = (z - grid.originZ) / grid.spacing;
+      const c0 = Math.max(0, Math.min(grid.cols - 1, Math.floor(col)));
+      const r0 = Math.max(0, Math.min(grid.rows - 1, Math.floor(row)));
+      return data[r0 * grid.cols + c0] ?? 0;
+    };
+
+    this.clipmapSystem = new ClipmapSystem(
+      this.device,
+      this.scene,
+      terrainMat,
+      {
+        rings: 5,
+        baseSpacing: MESH.VERTEX_SPACING,
+        baseExtent: 512,
+        worldRadius,
+      },
+      (x, z) => sampleGrid(x, z, grid.elevations),
+      (x, z) => sampleGrid(x, z, grid.moistures),
+    );
+
+    // Hide the old uniform terrain mesh — clipmap replaces it
+    const terrainObj = this.scene.getObject('terrain');
+    if (terrainObj) terrainObj.visible = false;
   }
 
   // --- Tick ---
@@ -278,6 +321,9 @@ export class World {
         dt,
       );
     });
+
+    // Clipmap LOD update (only rebuilds when camera moves enough)
+    this.clipmapSystem?.execute(this.camera.targetX, this.camera.targetZ);
 
     // Render (measured)
     this.telemetry.measureRender(() => {
@@ -392,6 +438,7 @@ export class World {
   // --- Cleanup ---
 
   destroy(): void {
+    this.clipmapSystem?.destroy();
     this.telemetry.destroy();
     this.simField.destroy();
     this.shallowWater.destroy();
