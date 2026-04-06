@@ -23,8 +23,20 @@ import {
   type IsobandResult,
 } from '../core/marching-squares';
 import { pixelToHex, hexKey } from '../core/geometry';
-import { PLANAR } from '../core/config';
-import type { HexData, PlanarAlignment } from '../core/types';
+import { PLANAR } from '../core/constants';
+import { PlanarAlignment, type AxialCoord } from '../core/types';
+
+// Minimal hex data interface for island mesh building (v2 transition — will use HexStore directly)
+interface HexData {
+  coordinates: AxialCoord;
+  terrain: number | string;
+  elevation: number;
+  planarAlignment: PlanarAlignment | number;
+  planarIntensity: number;
+  planarFragmentation: number;
+  planarLift: number;
+  planarRadius: number;
+}
 
 // ============================================================
 // CPU-side noise (cosmetic underside rocky texture)
@@ -258,7 +270,7 @@ export function buildIslandMesh(
 
   // ── 1. Classify vertices ──────────────────────────────────
   const hexMap = new Map<string, { intensity: number; lift: number; frag: number }>();
-  const AIR: PlanarAlignment = 'Plane of Air' as PlanarAlignment;
+  const AIR = PlanarAlignment.AIR;
   for (let i = 0; i < hexes.length; i++) {
     const h = hexes[i]!;
     if (h.planarAlignment !== AIR) continue;

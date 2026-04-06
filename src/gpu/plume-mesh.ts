@@ -12,7 +12,7 @@
  */
 
 import { TORNADO_VERTEX_STRIDE } from './types';
-import { PLANAR } from '../core/config';
+import { PLANAR } from '../core/constants';
 import type { MeshBuffers } from './terrain-mesh';
 
 const P = PLANAR.PLUME;

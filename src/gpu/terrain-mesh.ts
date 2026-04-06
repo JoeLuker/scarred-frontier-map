@@ -1,5 +1,5 @@
 import { WorldGenConfig } from '../core/types';
-import { getTerrainRenderParams } from '../core/config';
+import { getTerrainRenderParams } from '../core/constants';
 import { MESH_VERTEX_STRIDE } from './types';
 import type { MeshCompute } from './mesh-compute';
 

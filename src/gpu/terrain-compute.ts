@@ -1,8 +1,8 @@
-import { TERRAIN, BIOME, WORLD } from '../core/config';
+import { TERRAIN, BIOME, WORLD } from '../core/constants';
 import { WorldGenConfig, AxialCoord } from '../core/types';
 import { terrainFromId, elementFromId, flavorFromId } from './types';
 import { createTerrainNoiseWGSL } from './terrain-noise.wgsl';
-import type { TerrainProvider, TerrainResult } from '../core/engine';
+import type { TerrainProvider, TerrainResult } from '../core/types';
 
 // --- Terrain result from GPU readback ---
 
@@ -528,6 +528,7 @@ export class GpuTerrainProvider implements TerrainProvider {
       element: elementFromId(r.elementId),
       elevation: r.elevation,
       description: flavorFromId(r.flavorId),
+      hasRiver: r.flavorId === 2, // F_RIVER
     }));
   }
 

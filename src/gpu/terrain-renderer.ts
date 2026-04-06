@@ -1,6 +1,8 @@
 // --- WGSL Shader (terrain) ---
 
 import { createRenderNoiseWGSL } from './render-noise.wgsl';
+import { createTerrainNormalsWGSL } from './terrain-normals.wgsl';
+import { createTerrainMaterialsWGSL } from './terrain-materials.wgsl';
 
 export function createTerrainShader(): string {
   return /* wgsl */ `
@@ -32,6 +34,9 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var hex_state_tex: texture_2d<f32>;
 @group(0) @binding(2) var island_tex: texture_2d<f32>;
+@group(0) @binding(3) var elevation_tex: texture_2d<f32>;
+@group(0) @binding(4) var sim_fluid_tex: texture_2d<f32>;
+@group(0) @binding(5) var moisture_tex: texture_2d<f32>;
 
 // Per-object configuration (scene graph — identity model for terrain/sea)
 struct ObjectConfig {
@@ -193,6 +198,25 @@ fn vs_main(in: VertexIn) -> VertexOut {
   let edge_fade = smoothstep(u.grid_radius - 3.0, u.grid_radius, vt_hex_dist);
   y *= (1.0 - edge_fade);
 
+  // Sim field fluid displacement — stacks on top of planar displacement.
+  // Samples sim_fluid_tex so water visually pools and lava builds up.
+  let vs_sim_texel = world_to_sim_texel(in.pos_xz);
+  let vs_sim_fluid = textureLoad(sim_fluid_tex, vs_sim_texel, 0);
+  let vs_water_height = vs_sim_fluid.r;
+  let vs_sim_temp = vs_sim_fluid.a;
+
+  if (vs_water_height > 0.001) {
+    // Water: raise toward sea-level surface (y=0 in displaced space) so depressions fill.
+    let water_surface = 0.0;
+    if (y < water_surface) {
+      y = mix(y, water_surface, clamp(vs_water_height, 0.0, 1.0));
+    }
+  }
+  if (vs_sim_temp > 0.5) {
+    // Extreme heat: slight lava buildup on terrain.
+    y += smoothstep(0.5, 1.0, vs_sim_temp) * hs * 0.02;
+  }
+
   let local = vec4f(in.pos_xz.x, y, in.pos_xz.y, 1.0);
   let world = (obj.model * local).xyz;
   let clip = u.view_proj * vec4f(world, 1.0);
@@ -244,6 +268,8 @@ fn vs_island(in: VertexIslandIn) -> VertexOut {
 const PI: f32 = 3.14159265359;
 
 ` + createRenderNoiseWGSL() + `
+` + createTerrainNormalsWGSL() + `
+` + createTerrainMaterialsWGSL() + `
 
 // ============================================================
 // Tornado vertex shader — noise-displaced funnel with time-driven twist
@@ -698,6 +724,24 @@ fn get_planar_material(plane_type: u32, intensity: f32, fragmentation: f32, wp: 
 }
 
 // ============================================================
+// Sim field coordinate helper
+// ============================================================
+
+fn world_to_sim_texel(world_xz: vec2f) -> vec2i {
+  let dim = textureDimensions(elevation_tex);
+  let grid_size = vec2f(f32(dim.x), f32(dim.y));
+  // Derive world extent from grid dimensions and mesh spacing.
+  // cellSize = hex_size * 0.5, worldExtent = grid_size * cellSize / 2
+  let cell_size = u.hex_size * 0.5;
+  let world_extent = grid_size.x * cell_size * 0.5;
+  let uv = (world_xz + world_extent) / (world_extent * 2.0);
+  return vec2i(
+    clamp(i32(uv.x * grid_size.x), 0, i32(grid_size.x) - 1),
+    clamp(i32(uv.y * grid_size.y), 0, i32(grid_size.y) - 1),
+  );
+}
+
+// ============================================================
 // Water color helper
 // ============================================================
 
@@ -864,6 +908,15 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
 
     // Planar material replacement (water surface)
     color = mix(color, pm.replace_color, pm.replace_strength);
+
+    // Sim field overlay on water: heat can affect water surface
+    let w_sim_texel = world_to_sim_texel(in.world_pos.xz);
+    let w_sim_fluid = textureLoad(sim_fluid_tex, w_sim_texel, 0);
+    let w_sim_temp = w_sim_fluid.a;
+    if (w_sim_temp > 0.3) {
+      let steam_color = vec3f(0.7, 0.5, 0.3);
+      color = mix(color, steam_color, smoothstep(0.3, 0.8, w_sim_temp) * 0.5);
+    }
   } else {
     // --- Tile base from canonical terrain color (sharp per-hex) ---
     color = u.terrain_colors[hex_terrain_id].rgb;
@@ -871,6 +924,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     // Per-hex subtle variation (each tile visually distinct)
     let hex_hash = hash2(hex.qr * 0.73 + vec2f(17.3, 31.7));
     color *= (0.92 + hex_hash * 0.16);
+
+    // Procedural material detail — high-frequency surface texture per terrain type.
+    // Fades out at distance to avoid noise aliasing.
+    let mat_detail_fade = material_detail_fade(in.world_pos, u.eye_pos);
+    if (mat_detail_fade > 0.01) {
+      let mat = sample_terrain_material(hex_terrain_id, in.world_pos.xz, slope, in.moisture);
+      color *= mix(vec3f(1.0), mat.color_mod, mat_detail_fade);
+    }
 
     // Subtle moisture modulation within the tile
     let moisture_shift = (in.moisture + pm.moisture_mod - 0.5) * 0.12;
@@ -924,6 +985,29 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     // Planar material replacement (before lighting)
     color = mix(color, pm.replace_color, pm.replace_strength);
 
+    // --- Sim field fluid overlay (continuous physics layer) ---
+    let sim_texel = world_to_sim_texel(in.world_pos.xz);
+    let sim_fluid = textureLoad(sim_fluid_tex, sim_texel, 0);
+    let sim_water = sim_fluid.r;  // water height
+    let sim_vel_x = sim_fluid.g;  // velocity x
+    let sim_vel_y = sim_fluid.b;  // velocity y
+    let sim_temp = sim_fluid.a;   // temperature
+
+    // Water overlay: blue tint proportional to water height
+    if (sim_water > 0.01) {
+      let water_tint = vec3f(0.08, 0.22, 0.55);
+      let deep_water = vec3f(0.03, 0.08, 0.20);
+      let fluid_color = mix(water_tint, deep_water, clamp(sim_water, 0.0, 1.0));
+      color = mix(color, fluid_color, smoothstep(0.0, 0.1, sim_water) * 0.75);
+    }
+    // Fire/heat: orange glow proportional to temperature
+    if (sim_temp > 0.3) {
+      let fire_lo = vec3f(0.6, 0.15, 0.0);
+      let fire_hi = vec3f(1.0, 0.4, 0.1);
+      let fire_color = mix(fire_lo, fire_hi, smoothstep(0.3, 0.8, sim_temp));
+      color = mix(color, fire_color, smoothstep(0.3, 0.8, sim_temp) * 0.7);
+    }
+
     // Material roughness: wet lowlands get specular, dry highlands are matte
     let roughness = clamp(mix(0.3, 0.95, smoothstep(0.0, 0.5, norm_elev)) + pm.roughness_mod, 0.05, 1.0);
     let half_vec = normalize(sun_dir + view_dir);
@@ -934,8 +1018,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     color += SUN_COLOR * land_spec;
   }
 
-  // --- Normal perturbation from planar effects ---
-  let perturbed_normal = normalize(normal + pm.normal_offset);
+  // --- Normal perturbation from planar effects + procedural micro-detail ---
+  let view_dist = length(in.world_pos - u.eye_pos);
+  let frag_land_range = max(1.0 - sea, 0.001);
+  let frag_norm_elev = clamp((in.elevation - sea) / frag_land_range, 0.0, 1.0);
+  let micro_normal = terrain_normal_detail(in.world_pos.xz, hex_terrain_id, slope, frag_norm_elev, view_dist);
+  let perturbed_normal = normalize(normal + pm.normal_offset + micro_normal);
 
   // --- Directional lighting (Wrapped Lambert with planar modifiers) ---
   let NdotL = dot(perturbed_normal, sun_dir);
@@ -981,7 +1069,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
   color = mix(color, color * 0.3, grid_line * grid_opacity);
 
   // Atmospheric scattering (replaces flat fog)
-  let view_dist = length(in.world_pos - u.eye_pos);
+  // view_dist already computed above (normal perturbation section)
   let view_to_frag = normalize(in.world_pos - u.eye_pos);
   let fog_amount = 1.0 - exp(-view_dist * FOG_DENSITY);
 

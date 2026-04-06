@@ -1,4 +1,4 @@
-import { TERRAIN } from '../core/config';
+import { TERRAIN } from '../core/constants';
 
 /**
  * Shared WGSL noise functions and terrain field sampling.

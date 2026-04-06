@@ -13,7 +13,7 @@
  * terrain-noise.wgsl.ts referencing `params`).
  */
 
-import { PLANAR } from '../core/config';
+import { PLANAR } from '../core/constants';
 
 export function createRenderNoiseWGSL(): string {
   return /* wgsl */ `

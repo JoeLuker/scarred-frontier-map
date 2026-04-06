@@ -66,8 +66,13 @@ export class Scene {
   // Texture references (for group 0 rebuild)
   private hexStateTexture: GPUTexture | null = null;
   private islandTexture: GPUTexture | null = null;
+  private elevationTexture: GPUTexture | null = null;
+  private simFluidTexture: GPUTexture | null = null;
+  private moistureTexture: GPUTexture | null = null;
   private dummyHexTexture: GPUTexture;
   private dummyIslandTexture: GPUTexture;
+  private dummyR32Texture: GPUTexture;
+  private dummyRgba32Texture: GPUTexture;
 
   private constructor(
     device: GPUDevice,
@@ -80,6 +85,8 @@ export class Scene {
     objectBindGroup: GPUBindGroup,
     dummyHexTexture: GPUTexture,
     dummyIslandTexture: GPUTexture,
+    dummyR32Texture: GPUTexture,
+    dummyRgba32Texture: GPUTexture,
   ) {
     this.device = device;
     this.context = context;
@@ -91,6 +98,8 @@ export class Scene {
     this.objectBindGroup = objectBindGroup;
     this.dummyHexTexture = dummyHexTexture;
     this.dummyIslandTexture = dummyIslandTexture;
+    this.dummyR32Texture = dummyR32Texture;
+    this.dummyRgba32Texture = dummyRgba32Texture;
 
     this.objectStagingBuffer = new ArrayBuffer(MAX_OBJECT_SLOTS * OBJECT_UNIFORM_SLOT);
     this.objectStagingF32 = new Float32Array(this.objectStagingBuffer);
@@ -120,6 +129,21 @@ export class Scene {
           binding: 2,
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           texture: { sampleType: 'float', viewDimension: '2d' },
+        },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
+        },
+        {
+          binding: 4,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
+        },
+        {
+          binding: 5,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
         },
       ],
     });
@@ -176,11 +200,37 @@ export class Scene {
       [1, 1],
     );
 
+    // r32float dummy for elevation and moisture sim field textures
+    const dummyR32Texture = device.createTexture({
+      size: [1, 1],
+      format: 'r32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    device.queue.writeTexture(
+      { texture: dummyR32Texture },
+      new Float32Array([0]),
+      { bytesPerRow: 4 },
+      [1, 1],
+    );
+
+    // rgba32float dummy for sim fluid texture
+    const dummyRgba32Texture = device.createTexture({
+      size: [1, 1],
+      format: 'rgba32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    device.queue.writeTexture(
+      { texture: dummyRgba32Texture },
+      new Float32Array([0, 0, 0, 0]),
+      { bytesPerRow: 16 },
+      [1, 1],
+    );
+
     return new Scene(
       device, context, format,
       group0Layout, group1Layout,
       frameUniformBuffer, objectUniformBuffer, objectBindGroup,
-      dummyHexTexture, dummyIslandTexture,
+      dummyHexTexture, dummyIslandTexture, dummyR32Texture, dummyRgba32Texture,
     );
   }
 
@@ -231,15 +281,36 @@ export class Scene {
     this.rebuildGroup0();
   }
 
+  setElevationTexture(texture: GPUTexture): void {
+    this.elevationTexture = texture;
+    this.rebuildGroup0();
+  }
+
+  setSimFluidTexture(texture: GPUTexture): void {
+    this.simFluidTexture = texture;
+    this.rebuildGroup0();
+  }
+
+  setMoistureTexture(texture: GPUTexture): void {
+    this.moistureTexture = texture;
+    this.rebuildGroup0();
+  }
+
   private rebuildGroup0(): void {
     const hexTex = this.hexStateTexture ?? this.dummyHexTexture;
     const islandTex = this.islandTexture ?? this.dummyIslandTexture;
+    const elevTex = this.elevationTexture ?? this.dummyR32Texture;
+    const simFluidTex = this.simFluidTexture ?? this.dummyRgba32Texture;
+    const moistTex = this.moistureTexture ?? this.dummyR32Texture;
     this.group0BindGroup = this.device.createBindGroup({
       layout: this.group0Layout,
       entries: [
         { binding: 0, resource: { buffer: this.frameUniformBuffer } },
         { binding: 1, resource: hexTex.createView() },
         { binding: 2, resource: islandTex.createView() },
+        { binding: 3, resource: elevTex.createView() },
+        { binding: 4, resource: simFluidTex.createView() },
+        { binding: 5, resource: moistTex.createView() },
       ],
     });
   }
@@ -411,5 +482,7 @@ export class Scene {
     this.depthTexture?.destroy();
     this.dummyHexTexture.destroy();
     this.dummyIslandTexture.destroy();
+    this.dummyR32Texture.destroy();
+    this.dummyRgba32Texture.destroy();
   }
 }

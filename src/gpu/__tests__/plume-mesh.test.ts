@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildPlumeMesh, type PlumeDescriptor } from '../plume-mesh';
-import { PLANAR } from '../../core/config';
+import { PLANAR } from '../../core/constants';
 import { TORNADO_VERTEX_STRIDE } from '../types';
 
 const P = PLANAR.PLUME;
